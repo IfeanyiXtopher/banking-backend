@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="en" xmlns="http://www.w3.org/1999/xhtml" xmlns:v="urn:schemas-microsoft-com:vml">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <title>{{ email_subject|default:bank_name }}</title>
+    <!--[if !mso]><!-->
+    <style type="text/css">
+      @keyframes sp-footer-in {
+        from {
+          opacity: 0.6;
+        }
+        to {
+          opacity: 1;
+        }
+      }
+      .sp-footer-wrap {
+        animation: sp-footer-in 1s ease-out both;
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .sp-footer-wrap {
+          animation: none !important;
+        }
+      }
+    </style>
+    <!--<![endif]-->
+  </head>
+  <body
+    style="
+      margin: 0;
+      padding: 0;
+      width: 100% !important;
+      background-color: #f0f1f4;
+      font-family: 'Segoe UI', Helvetica, Arial, sans-serif;
+      -webkit-text-size-adjust: 100%;
+    "
+  >
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color: #f0f1f4">
+      <tr>
+        <td align="center" style="padding: 24px 16px 32px">
+          <table
+            role="presentation"
+            width="600"
+            cellpadding="0"
+            cellspacing="0"
+            border="0"
+            style="width: 100%; max-width: 600px; border-collapse: separate"
+          >
+            <!-- ========== HEADER ========== -->
+            <tr>
+              <td
+                style="
+                  background-color: {{ primary_color }};
+                  background-image: url('data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%22600%22 height=%22120%22 viewBox=%220 0 600 120%22%3E%3Cdefs%3E%3ClinearGradient id=%22g%22 x1=%220%25%22 y1=%220%25%22 x2=%22100%25%22 y2=%22100%25%22%3E%3Cstop offset=%220%25%22 stop-color=%22%23152a1e%22/%3E%3Cstop offset=%22100%25%22 stop-color=%22%232d5040%22/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width=%22600%22 height=%22120%22 fill=%22url(%23g)%22/%3E%3Cpath fill=%22%233d6b55%22 fill-opacity=%220.35%22 d=%22M0 80 Q150 20 300 70 T600 50 L600 120 L0 120 Z%22/%3E%3Cpath fill=%22%232d5040%22 fill-opacity=%220.45%22 d=%22M0 95 Q200 40 400 85 T600 65 L600 120 L0 120 Z%22/%3E%3C/svg%3E');
+                  background-repeat: no-repeat;
+                  background-size: cover;
+                  background-position: center;
+                  border-radius: 12px 12px 0 0;
+                  padding: 28px 36px;
+                "
+              >
+                {% if has_logo %}
+                <img
+                  src="{{ logo_src }}"
+                  alt="{{ bank_name }}"
+                  width="200"
+                  height="48"
+                  style="display: block; border: 0; height: 48px; width: auto; max-width: 200px"
+                />
+                {% else %}
+                <p
+                  style="
+                    margin: 0;
+                    font-size: 32px;
+                    font-weight: 700;
+                    letter-spacing: -0.03em;
+                    color: #ffffff;
+                    line-height: 1;
+                  "
+                >
+                  SafaPay
+                </p>
+                {% endif %}
+              </td>
+            </tr>
+
+            <!-- ========== BODY ========== -->
+            <tr>
+              <td
+                style="
+                  background-color: #ffffff;
+                  padding: 36px 40px 40px;
+                  font-size: 15px;
+                  line-height: 1.65;
+                  color: #374151;
+                "
+              >
+                {{ email_body|safe }}
+              </td>
+            </tr>
+
+            <!-- ========== FOOTER ========== -->
+            <tr>
+              <td
+                class="sp-footer-wrap"
+                align="center"
+                style="background-color: #ffffff; padding: 0 0 32px; border-radius: 0 0 12px 12px"
+              >
+                <!-- Thick primary line above social icons (bgcolor for Outlook/Gmail) -->
+                <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+                  <tr>
+                    <td
+                      bgcolor="{{ primary_color }}"
+                      height="6"
+                      style="
+                        height: 6px;
+                        line-height: 6px;
+                        font-size: 0;
+                        background-color: {{ primary_color }};
+                      "
+                    >
+                      &#8203;
+                    </td>
+                  </tr>
+                </table>
+
+                <p
+                  style="
+                    margin: 0 0 12px;
+                    font-size: 11px;
+                    font-weight: 600;
+                    letter-spacing: 0.12em;
+                    text-transform: uppercase;
+                    color: #6b7280;
+                    text-align: center;
+                  "
+                >
+                  We&apos;re social
+                </p>
+                <table
+                  role="presentation"
+                  cellpadding="0"
+                  cellspacing="0"
+                  border="0"
+                  align="center"
+                  style="margin: 0 auto 20px"
+                >
+                  <tr>
+                    {% for icon in social_icons %}
+                    <td style="padding: 0 6px">
+                      <a
+                        href="{{ icon.url }}"
+                        target="_blank"
+                        title="{{ icon.label }}"
+                        style="display: block; text-decoration: none"
+                      >
+                        <table
+                          role="presentation"
+                          cellpadding="0"
+                          cellspacing="0"
+                          border="0"
+                          style="
+                            width: 44px;
+                            height: 44px;
+                            border: 1px solid #d1d5db;
+                            border-radius: 8px;
+                            background-color: #ffffff;
+                          "
+                        >
+                          <tr>
+                            <td
+                              align="center"
+                              valign="middle"
+                              style="
+                                width: 44px;
+                                height: 44px;
+                                font-family: 'Segoe UI', Helvetica, Arial, sans-serif;
+                                font-size: {% if icon.glyph == 'in' %}15{% elif icon.glyph == 'f' %}22{% else %}18{% endif %}px;
+                                font-weight: 700;
+                                color: {{ primary_color }};
+                                line-height: 44px;
+                              "
+                            >
+                              {{ icon.glyph }}
+                            </td>
+                          </tr>
+                        </table>
+                      </a>
+                    </td>
+                    {% endfor %}
+                  </tr>
+                </table>
+
+                <p style="margin: 0; padding: 0 40px; font-size: 12px; color: #9ca3af; line-height: 1.5; text-align: center">
+                  © {{ copyright_year }} All Rights Reserved
+                </p>
+              </td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+    </table>
+  </body>
+</html>

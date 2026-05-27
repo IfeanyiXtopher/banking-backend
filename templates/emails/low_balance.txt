@@ -1,0 +1,10 @@
+Hi {{ user.full_name }},
+
+Your account {{ account_number }} balance has dropped below your alert threshold of {{ currency }} {{ threshold }}.
+
+Current Balance: {{ currency }} {{ balance }}
+
+Consider topping up your account to avoid transaction failures.
+
+Best regards,
+SafaPay Bank Team

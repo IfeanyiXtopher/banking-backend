@@ -1,0 +1,25 @@
+[Unit]
+Description=SafaPay Bank - Gunicorn (ASGI)
+After=network.target
+
+[Service]
+Type=simple
+
+# Adjust these for your server:
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/opt/banking-backend
+EnvironmentFile=/opt/banking-backend/.env
+
+ExecStart=/opt/banking-backend/venv/bin/gunicorn -c /opt/banking-backend/gunicorn.conf.py config.asgi:application
+
+Restart=always
+RestartSec=5
+
+# Make sure Ctrl+C / systemctl stop behaves reasonably:
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target
+

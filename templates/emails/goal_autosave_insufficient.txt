@@ -1,0 +1,10 @@
+Hi {{ user.full_name }},
+
+We tried to move {{ amount }} to your savings goal “{{ goal_title }}” ({{ plan_label }}), but your primary account doesn’t have enough available balance right now.
+
+Available in your primary account: {{ available_balance }}.
+
+Add funds to your primary account so we can keep funding this goal on the next run.
+
+Best regards,
+SafaPay Bank Team

@@ -1,0 +1,19 @@
+{% autoescape off %}Hi {{ full_name|default:user.full_name }},
+
+Welcome to SafaPay Bank! Your account has been successfully created.
+
+YOUR SIGN-IN EMAIL
+{{ user_email|default:user.email }}
+
+Use this email and the password you chose when registering.
+Sign in: {{ sign_in_url }}
+
+RECOMMENDED NEXT STEPS
+1. Complete your KYC verification to unlock all features
+2. Set up Multi-Factor Authentication for extra security
+3. Explore your dashboard — balances, savings, and everyday banking
+
+Questions? Contact {{ support_email }}
+
+We are glad to have you with us.
+{% endautoescape %}

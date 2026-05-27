@@ -1,0 +1,8 @@
+{{ bank_name }}
+{{ bank_tagline }}
+────────────────────────────────────────
+
+{{ email_body }}
+
+────────────────────────────────────────
+© {{ copyright_year }} All Rights Reserved

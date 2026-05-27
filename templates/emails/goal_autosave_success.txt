@@ -1,0 +1,10 @@
+Hi {{ user.full_name }},
+
+We automatically moved {{ amount }} to your savings goal “{{ goal_title }}” ({{ plan_label }}).
+
+Saved toward this goal so far: {{ new_saved_balance }}.
+
+You’ll also see this as a transfer on your primary account.
+
+Best regards,
+SafaPay Bank Team

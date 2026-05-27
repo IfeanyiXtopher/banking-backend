@@ -1,0 +1,7 @@
+Hello {{ user.full_name }},
+
+Your recent profile change request has been approved. Your account details in SafaPay Bank now reflect the updates we reviewed.
+
+If you did not request these changes, contact support immediately.
+
+— SafaPay Bank Security Team

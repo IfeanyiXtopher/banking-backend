@@ -1,0 +1,8 @@
+Hi {{ user.full_name }},
+
+Your loan payment of ${{ amount }} (Installment #{{ installment }}) is due on {{ due_date }}.
+
+Please ensure you have sufficient funds in your account for the automatic payment.
+
+Best regards,
+SafaPay Bank Team
