@@ -7,7 +7,7 @@ from django.urls import reverse
 from rest_framework.test import APIClient
 
 from apps.accounts.models import Account, Currency
-from apps.transactions.regulated_models import ComplianceFeeLine
+from apps.transactions.regulated_models import ComplianceFeeLine, RegulatedTransferSessionLine
 from apps.transactions.regulated_flow import start_international_session
 from apps.transactions.tests.test_intl_wire import _full_raw
 from apps.transactions.intl_wire import validate_and_normalize_international_details
@@ -184,3 +184,31 @@ def test_create_succeeds_when_session_sync_fails(mock_sync, super_admin, custome
     )
     assert res.status_code == 201, res.data
     mock_sync.assert_called_once()
+
+
+@pytest.mark.django_db
+def test_delete_compliance_line_linked_to_session(super_admin, customer, account, wire):
+    line = ComplianceFeeLine.objects.create(
+        user=customer,
+        name='Removable',
+        code='removable-fee',
+        applies_to=ComplianceFeeLine.AppliesTo.INTERNATIONAL_TRANSFER,
+        flat_amount=Decimal('25.00'),
+    )
+    start_international_session(
+        customer,
+        account,
+        '2222222222222222',
+        Decimal('1000'),
+        'TRANSFER_INTERNATIONAL',
+        international_wire_details=wire,
+    )
+    assert RegulatedTransferSessionLine.objects.filter(fee_line=line).exists()
+
+    client = APIClient()
+    client.force_authenticate(user=super_admin)
+    url = reverse('admin-compliance-fee-line-detail', kwargs={'pk': line.pk})
+    res = client.delete(url)
+    assert res.status_code == 204
+    assert not ComplianceFeeLine.objects.filter(pk=line.pk).exists()
+    assert not RegulatedTransferSessionLine.objects.filter(fee_line_id=line.pk).exists()

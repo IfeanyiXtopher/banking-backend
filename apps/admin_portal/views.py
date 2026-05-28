@@ -968,15 +968,8 @@ class AdminComplianceFeeLineDetailView(generics.RetrieveUpdateDestroyAPIView):
     def perform_destroy(self, instance):
         if not instance.user_id:
             assert_can_manage_global_compliance(self.request.user)
-        from apps.transactions.regulated_models import RegulatedTransferSessionLine
-
-        if RegulatedTransferSessionLine.objects.filter(fee_line=instance).exists():
-            from rest_framework.exceptions import ValidationError
-
-            raise ValidationError(
-                'This fee line is linked to an existing compliance session and cannot be deleted. '
-                'Deactivate it instead.',
-            )
+        elif instance.user_id:
+            assert_owner_in_scope(self.request.user, instance.user_id)
         instance.delete()
 
 

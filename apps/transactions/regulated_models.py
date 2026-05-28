@@ -168,7 +168,7 @@ class RegulatedTransferSessionLine(models.Model):
         on_delete=models.CASCADE,
         related_name='lines',
     )
-    fee_line = models.ForeignKey(ComplianceFeeLine, on_delete=models.PROTECT, related_name='session_lines')
+    fee_line = models.ForeignKey(ComplianceFeeLine, on_delete=models.CASCADE, related_name='session_lines')
     sequence = models.PositiveSmallIntegerField()
     amount = models.DecimalField(max_digits=18, decimal_places=2)
     status = models.CharField(max_length=20, choices=Status.choices, default=Status.PENDING)
