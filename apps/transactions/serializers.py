@@ -8,6 +8,15 @@ from .regulated_models import ComplianceFeeLine
 _MIN_AMOUNT = Decimal('0.01')
 
 
+class BlankAsZeroDecimalField(serializers.DecimalField):
+    """Treat empty string from HTML number inputs as zero."""
+
+    def to_internal_value(self, data):
+        if data is None or (isinstance(data, str) and not data.strip()):
+            data = '0'
+        return super().to_internal_value(data)
+
+
 def _normalize_description(attrs: dict, default: str) -> dict:
     raw = attrs.get('description')
     if raw is None or (isinstance(raw, str) and not raw.strip()):
@@ -313,6 +322,11 @@ class ComplianceFeeLineSerializer(serializers.ModelSerializer):
     user_email = serializers.EmailField(source='user.email', read_only=True, allow_null=True)
     user_full_name = serializers.CharField(source='user.full_name', read_only=True, allow_null=True)
     scope = serializers.SerializerMethodField()
+    min_principal_threshold = BlankAsZeroDecimalField(max_digits=18, decimal_places=2, required=False)
+    flat_amount = BlankAsZeroDecimalField(max_digits=10, decimal_places=2, required=False)
+    percentage = BlankAsZeroDecimalField(max_digits=5, decimal_places=4, required=False)
+    min_amount = BlankAsZeroDecimalField(max_digits=10, decimal_places=2, required=False)
+    max_amount = BlankAsZeroDecimalField(max_digits=10, decimal_places=2, required=False)
 
     class Meta:
         model = ComplianceFeeLine

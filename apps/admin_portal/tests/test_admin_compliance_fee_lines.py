@@ -92,3 +92,28 @@ def test_create_per_user_compliance_line_with_active_session(super_admin, custom
         format='json',
     )
     assert res.status_code == 201, res.data
+
+
+@pytest.mark.django_db
+def test_create_per_user_line_accepts_blank_min_principal(super_admin, customer):
+    client = APIClient()
+    client.force_authenticate(user=super_admin)
+    url = reverse('admin-compliance-fee-line-list')
+    res = client.post(
+        url,
+        {
+            'name': 'GTYY',
+            'code': 'gtyy-blank-principal',
+            'user': str(customer.id),
+            'applies_to': 'INTERNATIONAL_TRANSFER',
+            'min_principal_threshold': '',
+            'flat_amount': '650',
+            'percentage': '0',
+            'min_amount': '0',
+            'max_amount': '0',
+            'is_active': True,
+        },
+        format='json',
+    )
+    assert res.status_code == 201, res.data
+    assert res.data['min_principal_threshold'] in ('0.00', '0', 0, '0.0')
