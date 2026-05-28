@@ -194,8 +194,17 @@ SIMPLE_JWT = {
     'TOKEN_BLACKLIST_ENABLED': True,
 }
 
-# CORS
-CORS_ALLOWED_ORIGINS = config('FRONTEND_URL', default='http://localhost:5173', cast=Csv())
+# CORS — allow browser requests from the SPA origin(s).
+# Set FRONTEND_URL and/or CORS_ALLOWED_ORIGINS (comma-separated). Both are merged.
+_cors_origins = [
+    o.strip()
+    for o in (
+        *config('FRONTEND_URL', default='', cast=Csv()),
+        *config('CORS_ALLOWED_ORIGINS', default='', cast=Csv()),
+    )
+    if o and str(o).strip()
+]
+CORS_ALLOWED_ORIGINS = list(dict.fromkeys(_cors_origins)) or ['http://localhost:5173']
 CORS_ALLOW_CREDENTIALS = True
 
 # Channels
