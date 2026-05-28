@@ -29,6 +29,15 @@ fi
 
 PYTHON_BIN="${PYTHON_BIN:-${VENV_DIR}/bin/python}"
 PIP_BIN="${PIP_BIN:-${VENV_DIR}/bin/pip}"
+REQ_FILE="${REQ_FILE:-}"
+
+if [[ -z "${REQ_FILE}" ]]; then
+  if [[ -f "${REPO_DIR}/requirements.txt" ]]; then
+    REQ_FILE="${REPO_DIR}/requirements.txt"
+  elif [[ -f "${REPO_DIR}/requirements" ]]; then
+    REQ_FILE="${REPO_DIR}/requirements"
+  fi
+fi
 
 echo "==> Deploy starting"
 
@@ -56,7 +65,14 @@ fi
 
 echo "==> Install backend dependencies"
 "${PIP_BIN}" install --upgrade pip
-"${PIP_BIN}" install -r requirements.txt
+if [[ -z "${REQ_FILE}" || ! -f "${REQ_FILE}" ]]; then
+  echo "ERROR: requirements file not found." >&2
+  echo "Expected one of:" >&2
+  echo "  - ${REPO_DIR}/requirements.txt" >&2
+  echo "  - ${REPO_DIR}/requirements" >&2
+  exit 1
+fi
+"${PIP_BIN}" install -r "${REQ_FILE}"
 
 echo "==> Django migrations"
 "${PYTHON_BIN}" manage.py makemigrations
