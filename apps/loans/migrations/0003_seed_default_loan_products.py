@@ -45,7 +45,7 @@ def seed_loan_products(apps, schema_editor):
             'name': 'Business Term Loan',
             'loan_type': 'BUSINESS',
             'interest_rate': Decimal('0.0950'),
-            'min_amount': Decimal('100000000'),
+            'min_amount': Decimal('100000'),
             'max_amount': Decimal('5000000000'),
             'min_term_months': 12,
             'max_term_months': 180,
