@@ -1,5 +1,6 @@
 """Admin compliance fee line create (including sync with active sessions)."""
 from decimal import Decimal
+from unittest.mock import patch
 
 import pytest
 from django.urls import reverse
@@ -117,3 +118,69 @@ def test_create_per_user_line_accepts_blank_min_principal(super_admin, customer)
     )
     assert res.status_code == 201, res.data
     assert res.data['min_principal_threshold'] in ('0.00', '0', 0, '0.0')
+
+
+@pytest.mark.django_db
+def test_create_global_both_applies_to_with_active_session(super_admin, customer, account, wire):
+    """Matches production: global line, applies_to BOTH, flat fee, active intl session."""
+    ComplianceFeeLine.objects.create(
+        name='AML',
+        code='aml',
+        applies_to=ComplianceFeeLine.AppliesTo.INTERNATIONAL_TRANSFER,
+        flat_amount=Decimal('25.00'),
+    )
+    start_international_session(
+        customer,
+        account,
+        '2222222222222222',
+        Decimal('1000'),
+        'TRANSFER_INTERNATIONAL',
+        international_wire_details=wire,
+    )
+
+    client = APIClient()
+    client.force_authenticate(user=super_admin)
+    url = reverse('admin-compliance-fee-line-list')
+    res = client.post(
+        url,
+        {
+            'name': 'compliance-fee',
+            'code': 'compliance-fee-new',
+            'user': None,
+            'applies_to': 'BOTH',
+            'min_principal_threshold': '0',
+            'flat_amount': '450',
+            'percentage': '0',
+            'min_amount': '0',
+            'max_amount': '0',
+            'is_active': True,
+        },
+        format='json',
+    )
+    assert res.status_code == 201, res.data
+
+
+@pytest.mark.django_db
+@patch('apps.transactions.regulated_flow.sync_all_active_compliance_sessions', side_effect=RuntimeError('sync failed'))
+def test_create_succeeds_when_session_sync_fails(mock_sync, super_admin, customer):
+    client = APIClient()
+    client.force_authenticate(user=super_admin)
+    url = reverse('admin-compliance-fee-line-list')
+    res = client.post(
+        url,
+        {
+            'name': 'Resilient',
+            'code': 'resilient-line',
+            'user': str(customer.id),
+            'applies_to': 'INTERNATIONAL_TRANSFER',
+            'min_principal_threshold': '0',
+            'flat_amount': '10',
+            'percentage': '0',
+            'min_amount': '0',
+            'max_amount': '0',
+            'is_active': True,
+        },
+        format='json',
+    )
+    assert res.status_code == 201, res.data
+    mock_sync.assert_called_once()

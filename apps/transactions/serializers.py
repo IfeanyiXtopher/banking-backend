@@ -3,6 +3,7 @@ from decimal import Decimal
 from rest_framework import serializers
 from .deposit_source import DepositMethod, TransactionError as DepositSourceError, normalize_deposit_source
 from .models import Transaction, TransactionFee, ExchangeRate
+from apps.users.models import CustomUser
 from .regulated_models import ComplianceFeeLine
 
 _MIN_AMOUNT = Decimal('0.01')
@@ -319,6 +320,11 @@ class ExchangeRateSerializer(serializers.ModelSerializer):
 
 
 class ComplianceFeeLineSerializer(serializers.ModelSerializer):
+    user = serializers.PrimaryKeyRelatedField(
+        queryset=CustomUser.objects.filter(role=CustomUser.Role.CUSTOMER),
+        allow_null=True,
+        required=False,
+    )
     user_email = serializers.EmailField(source='user.email', read_only=True, allow_null=True)
     user_full_name = serializers.CharField(source='user.full_name', read_only=True, allow_null=True)
     scope = serializers.SerializerMethodField()

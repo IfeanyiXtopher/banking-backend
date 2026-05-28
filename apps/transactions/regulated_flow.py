@@ -1,6 +1,7 @@
 """Session-based compliance fees: charge each line, then one OTP per line, then complete transfer/payout."""
 from __future__ import annotations
 
+import logging
 from datetime import timedelta
 from decimal import Decimal
 
@@ -18,6 +19,8 @@ from .regulated_models import ComplianceFeeLine, RegulatedTransferSession, Regul
 
 
 PURPOSE_REGULATED_FEE = 'regulated_fee'
+
+logger = logging.getLogger(__name__)
 
 SESSION_TTL = timedelta(minutes=45)
 
@@ -184,8 +187,11 @@ def sync_all_active_compliance_sessions(*, user=None) -> int:
     if user is not None:
         qs = qs.filter(user=user)
     total = 0
-    for session in qs:
-        total += sync_session_compliance_lines(session)
+    for session in qs.iterator(chunk_size=50):
+        try:
+            total += sync_session_compliance_lines(session)
+        except Exception:
+            logger.exception('Failed to sync compliance lines for session %s', session.pk)
     return total
 
 

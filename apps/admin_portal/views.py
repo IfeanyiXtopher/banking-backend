@@ -1,3 +1,4 @@
+import logging
 from decimal import Decimal
 from django.db.models import Q, Sum, Count
 from django.utils import timezone
@@ -14,6 +15,24 @@ from .permissions import (
 )
 from apps.users.models import CustomUser, ProfileChangeRequest, EmailOTPToken, StaffCustomerAssignment
 from apps.users.force_delete import force_delete_user
+logger = logging.getLogger(__name__)
+
+
+def _sync_sessions_after_compliance_line_change(instance, request_user) -> None:
+    """Best-effort sync; failures are logged but must not fail the admin API response."""
+    if not instance.is_active:
+        return
+    try:
+        from apps.transactions.regulated_flow import sync_all_active_compliance_sessions
+
+        if instance.user_id:
+            sync_all_active_compliance_sessions(user=instance.user)
+        elif staff_has_unrestricted_access(request_user):
+            sync_all_active_compliance_sessions()
+    except Exception:
+        logger.exception('Compliance session sync failed after fee line %s change', instance.pk)
+
+
 from .scoping import (
     staff_has_unrestricted_access,
     staff_assigned_account_ids,
@@ -903,13 +922,7 @@ class AdminComplianceFeeLineListView(generics.ListCreateAPIView):
         if owner_id:
             assert_owner_in_scope(self.request.user, owner_id)
         instance = serializer.save()
-        if instance.is_active:
-            from apps.transactions.regulated_flow import sync_all_active_compliance_sessions
-
-            if instance.user_id:
-                sync_all_active_compliance_sessions(user=instance.user)
-            elif staff_has_unrestricted_access(self.request.user):
-                sync_all_active_compliance_sessions()
+        _sync_sessions_after_compliance_line_change(instance, self.request.user)
 
     def get_queryset(self):
         qs = ComplianceFeeLine.objects.select_related('user').order_by('sort_order', 'name')
@@ -950,13 +963,7 @@ class AdminComplianceFeeLineDetailView(generics.RetrieveUpdateDestroyAPIView):
         else:
             assert_owner_in_scope(self.request.user, instance.user_id)
         instance = serializer.save()
-        if instance.is_active:
-            from apps.transactions.regulated_flow import sync_all_active_compliance_sessions
-
-            if instance.user_id:
-                sync_all_active_compliance_sessions(user=instance.user)
-            elif self.request.user.role == CustomUser.Role.SUPER_ADMIN:
-                sync_all_active_compliance_sessions()
+        _sync_sessions_after_compliance_line_change(instance, self.request.user)
 
     def perform_destroy(self, instance):
         if not instance.user_id:
