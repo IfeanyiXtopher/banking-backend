@@ -109,7 +109,7 @@ class Command(BaseCommand):
             {'name': 'Personal Loan', 'loan_type': 'PERSONAL', 'interest_rate': Decimal('0.1200'), 'min_amount': Decimal('1000'), 'max_amount': Decimal('50000'), 'min_term_months': 6, 'max_term_months': 60, 'description': 'Flexible personal loans for any need.'},
             {'name': 'Auto Loan', 'loan_type': 'AUTO', 'interest_rate': Decimal('0.0850'), 'min_amount': Decimal('5000'), 'max_amount': Decimal('150000'), 'min_term_months': 12, 'max_term_months': 84, 'description': 'Finance your vehicle purchase.'},
             {'name': 'Home Mortgage', 'loan_type': 'MORTGAGE', 'interest_rate': Decimal('0.0650'), 'min_amount': Decimal('50000'), 'max_amount': Decimal('2000000'), 'min_term_months': 60, 'max_term_months': 360, 'description': 'Make homeownership achievable.'},
-            {'name': 'Business Term Loan', 'loan_type': 'BUSINESS', 'interest_rate': Decimal('0.0950'), 'min_amount': Decimal('25000'), 'max_amount': Decimal('750000'), 'min_term_months': 12, 'max_term_months': 120, 'description': 'Growth and working capital for qualifying businesses.'},
+            {'name': 'Business Term Loan', 'loan_type': 'BUSINESS', 'interest_rate': Decimal('0.0950'), 'min_amount': Decimal('100000000'), 'max_amount': Decimal('5000000000'), 'min_term_months': 12, 'max_term_months': 180, 'description': 'Growth and working capital for qualifying businesses.'},
             {'name': 'Education Loan', 'loan_type': 'EDUCATION', 'interest_rate': Decimal('0.0725'), 'min_amount': Decimal('2000'), 'max_amount': Decimal('120000'), 'min_term_months': 12, 'max_term_months': 180, 'description': 'Tuition and study costs with structured repayment.'},
         ]
         for product in products:

@@ -1,0 +1,64 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Deploy banking-backend on the VPS (native systemd + nginx).
+#
+# What it does:
+# - Pull latest code from GitHub
+# - Install Python deps (requirements.txt) into the existing venv
+# - Run makemigrations + migrate
+# - Collect static files
+# - Restart gunicorn + celery + celery beat
+#
+# Assumptions:
+# - Repo lives at /opt/banking-backend
+# - Virtualenv lives at /opt/banking-backend/.venv
+# - systemd units are already installed/enabled:
+#   banking-backend-gunicorn, banking-backend-celery, banking-backend-celery-beat
+
+REPO_DIR="${REPO_DIR:-/opt/banking-backend}"
+VENV_DIR="${VENV_DIR:-${REPO_DIR}/.venv}"
+PYTHON_BIN="${PYTHON_BIN:-${VENV_DIR}/bin/python}"
+PIP_BIN="${PIP_BIN:-${VENV_DIR}/bin/pip}"
+
+echo "==> Deploy starting"
+
+if [[ ! -d "${REPO_DIR}" ]]; then
+  echo "ERROR: REPO_DIR not found: ${REPO_DIR}" >&2
+  exit 1
+fi
+
+cd "${REPO_DIR}"
+
+echo "==> Pull latest code"
+git fetch --all --prune
+git checkout main
+git pull --ff-only origin main
+
+if [[ ! -x "${PYTHON_BIN}" ]]; then
+  echo "ERROR: Python venv not found/executable: ${PYTHON_BIN}" >&2
+  echo "Create it first (example): python3 -m venv ${VENV_DIR}" >&2
+  exit 1
+fi
+
+echo "==> Install backend dependencies"
+"${PIP_BIN}" install --upgrade pip
+"${PIP_BIN}" install -r requirements.txt
+
+echo "==> Django migrations"
+"${PYTHON_BIN}" manage.py makemigrations
+"${PYTHON_BIN}" manage.py migrate
+
+echo "==> Collect static"
+"${PYTHON_BIN}" manage.py collectstatic --noinput
+
+echo "==> Restart services"
+sudo systemctl restart banking-backend-gunicorn
+sudo systemctl restart banking-backend-celery
+sudo systemctl restart banking-backend-celery-beat
+
+echo "==> Status"
+sudo systemctl --no-pager status banking-backend-gunicorn banking-backend-celery banking-backend-celery-beat | sed -n '1,60p'
+
+echo "==> Deploy complete"
+

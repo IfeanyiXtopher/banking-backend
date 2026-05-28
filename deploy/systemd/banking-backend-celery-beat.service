@@ -6,8 +6,8 @@ After=network.target
 Type=simple
 
 # Adjust these for your server:
-User=ubuntu
-Group=ubuntu
+User=safapay
+Group=safapay
 WorkingDirectory=/opt/banking-backend
 EnvironmentFile=/opt/banking-backend/.env
 
