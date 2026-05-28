@@ -32,10 +32,14 @@ PIP_BIN="${PIP_BIN:-${VENV_DIR}/bin/pip}"
 REQ_FILE="${REQ_FILE:-}"
 
 if [[ -z "${REQ_FILE}" ]]; then
-  if [[ -f "${REPO_DIR}/requirements.txt" ]]; then
+  if [[ -e "${REPO_DIR}/requirements.txt" ]]; then
     REQ_FILE="${REPO_DIR}/requirements.txt"
-  elif [[ -f "${REPO_DIR}/requirements" ]]; then
+  elif [[ -e "${REPO_DIR}/requirements" ]]; then
     REQ_FILE="${REPO_DIR}/requirements"
+  elif [[ -e "${REPO_DIR}/requirements/requirements.txt" ]]; then
+    REQ_FILE="${REPO_DIR}/requirements/requirements.txt"
+  elif [[ -e "${REPO_DIR}/requirements/base.txt" ]]; then
+    REQ_FILE="${REPO_DIR}/requirements/base.txt"
   fi
 fi
 
@@ -70,6 +74,8 @@ if [[ -z "${REQ_FILE}" || ! -f "${REQ_FILE}" ]]; then
   echo "Expected one of:" >&2
   echo "  - ${REPO_DIR}/requirements.txt" >&2
   echo "  - ${REPO_DIR}/requirements" >&2
+  echo "  - ${REPO_DIR}/requirements/requirements.txt" >&2
+  echo "  - ${REPO_DIR}/requirements/base.txt" >&2
   exit 1
 fi
 "${PIP_BIN}" install -r "${REQ_FILE}"
