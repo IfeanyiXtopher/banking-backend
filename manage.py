@@ -2,9 +2,15 @@
 import os
 import sys
 
+from decouple import config
+
 
 def main():
-    os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'config.settings.dev')
+    # Respect DJANGO_SETTINGS_MODULE from the shell or project .env (systemd uses EnvironmentFile).
+    os.environ.setdefault(
+        'DJANGO_SETTINGS_MODULE',
+        config('DJANGO_SETTINGS_MODULE', default='config.settings.dev'),
+    )
     try:
         from django.core.management import execute_from_command_line
     except ImportError as exc:
