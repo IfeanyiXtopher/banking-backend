@@ -17,7 +17,16 @@ set -euo pipefail
 #   banking-backend-gunicorn, banking-backend-celery, banking-backend-celery-beat
 
 REPO_DIR="${REPO_DIR:-/opt/banking-backend}"
-VENV_DIR="${VENV_DIR:-${REPO_DIR}/.venv}"
+VENV_DIR="${VENV_DIR:-}"
+
+if [[ -z "${VENV_DIR}" ]]; then
+  if [[ -x "${REPO_DIR}/.venv/bin/python" ]]; then
+    VENV_DIR="${REPO_DIR}/.venv"
+  elif [[ -x "${REPO_DIR}/venv/bin/python" ]]; then
+    VENV_DIR="${REPO_DIR}/venv"
+  fi
+fi
+
 PYTHON_BIN="${PYTHON_BIN:-${VENV_DIR}/bin/python}"
 PIP_BIN="${PIP_BIN:-${VENV_DIR}/bin/pip}"
 
@@ -37,7 +46,11 @@ git pull --ff-only origin main
 
 if [[ ! -x "${PYTHON_BIN}" ]]; then
   echo "ERROR: Python venv not found/executable: ${PYTHON_BIN}" >&2
-  echo "Create it first (example): python3 -m venv ${VENV_DIR}" >&2
+  echo "Expected one of:" >&2
+  echo "  - ${REPO_DIR}/.venv/bin/python" >&2
+  echo "  - ${REPO_DIR}/venv/bin/python" >&2
+  echo "" >&2
+  echo "Create it first (example): python3 -m venv ${REPO_DIR}/venv" >&2
   exit 1
 fi
 
