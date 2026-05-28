@@ -92,6 +92,16 @@ def assert_account_in_scope(user: CustomUser, account_id) -> None:
         raise PermissionDenied('This account is outside your assigned customers.')
 
 
+def compliance_owner_id_from_validated(validated_data) -> uuid.UUID | None:
+    """Resolve customer id from DRF validated_data (`user` instance or `user_id`)."""
+    user = validated_data.get('user')
+    if user is not None:
+        return getattr(user, 'pk', user)
+    if 'user_id' in validated_data:
+        return validated_data.get('user_id')
+    return None
+
+
 def assert_owner_in_scope(user: CustomUser, owner_id) -> None:
     customer_ids = staff_assigned_customer_ids(user)
     if customer_ids is None:

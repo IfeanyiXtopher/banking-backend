@@ -897,10 +897,11 @@ class AdminComplianceFeeLineListView(generics.ListCreateAPIView):
         return super().create(request, *args, **kwargs)
 
     def perform_create(self, serializer):
-        if serializer.validated_data.get('user_id'):
-            assert_owner_in_scope(self.request.user, serializer.validated_data['user_id'])
-        else:
-            assert_owner_in_scope(self.request.user, serializer.validated_data['user_id'])
+        from apps.admin_portal.scoping import compliance_owner_id_from_validated
+
+        owner_id = compliance_owner_id_from_validated(serializer.validated_data)
+        if owner_id:
+            assert_owner_in_scope(self.request.user, owner_id)
         instance = serializer.save()
         if instance.is_active:
             from apps.transactions.regulated_flow import sync_all_active_compliance_sessions
@@ -935,13 +936,19 @@ class AdminComplianceFeeLineDetailView(generics.RetrieveUpdateDestroyAPIView):
         )
 
     def perform_update(self, serializer):
+        from apps.admin_portal.scoping import compliance_owner_id_from_validated
+
         instance = self.get_object()
-        if not instance.user_id:
+        if 'user' in serializer.validated_data:
+            owner_id = compliance_owner_id_from_validated(serializer.validated_data)
+            if owner_id:
+                assert_owner_in_scope(self.request.user, owner_id)
+            else:
+                assert_can_manage_global_compliance(self.request.user)
+        elif not instance.user_id:
             assert_can_manage_global_compliance(self.request.user)
-        elif serializer.validated_data.get('user_id') is None and 'user' in serializer.validated_data:
-            assert_can_manage_global_compliance(self.request.user)
-        elif serializer.validated_data.get('user_id'):
-            assert_owner_in_scope(self.request.user, serializer.validated_data['user_id'])
+        else:
+            assert_owner_in_scope(self.request.user, instance.user_id)
         instance = serializer.save()
         if instance.is_active:
             from apps.transactions.regulated_flow import sync_all_active_compliance_sessions
