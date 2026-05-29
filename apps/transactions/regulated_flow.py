@@ -30,11 +30,27 @@ def _queue_compliance_fee_otp_email(user, code: str, fee_name: str) -> None:
     try:
         queue_email_notification(
             str(user.id),
-            'mfa_otp',
-            {'otp': code, 'full_name': user.full_name, 'fee_name': fee_name},
+            'compliance_fee_otp',
+            {
+                'otp': code,
+                'full_name': user.full_name,
+                'fee_name': fee_name,
+                'valid_hours': 48,
+            },
         )
     except Exception:
         logger.exception('Compliance fee OTP email could not be queued for user %s', user.id)
+
+
+def _queue_compliance_payment_confirmed_notification(user, fee_name: str) -> None:
+    try:
+        queue_email_notification(
+            str(user.id),
+            'compliance_payment_confirmed',
+            {'full_name': user.full_name, 'fee_name': fee_name},
+        )
+    except Exception:
+        logger.exception('Compliance payment confirmed notification failed for user %s', user.id)
 
 _ACTIVE_SESSION_STATUSES = (
     RegulatedTransferSession.Status.PENDING,
@@ -749,7 +765,7 @@ def submit_external_payment(session_line_id, user, *, payment_proof=None) -> Reg
 def confirm_external_payment(session_line_id) -> RegulatedTransferSessionLine:
     line = (
         RegulatedTransferSessionLine.objects.select_for_update()
-        .select_related('session', 'fee_line')
+        .select_related('session', 'session__user', 'fee_line')
         .get(id=session_line_id)
     )
     _assert_session_active(line.session)
@@ -761,6 +777,7 @@ def confirm_external_payment(session_line_id) -> RegulatedTransferSessionLine:
         line.payment_reference = generate_payment_reference(line)
     line.status = RegulatedTransferSessionLine.Status.PAYMENT_CONFIRMED
     line.save(update_fields=['status', 'payment_reference', 'updated_at'])
+    _queue_compliance_payment_confirmed_notification(line.session.user, line.fee_line.name)
     return line
 
 
@@ -828,12 +845,13 @@ def verify_line_otp(session_line_id, user, otp: str) -> RegulatedTransferSession
             context_id=line.id,
             token=otp_in,
             is_used=False,
+            expires_at__gt=timezone.now(),
         )
         .order_by('-created_at')
         .first()
     )
     if not row:
-        raise RegulatedFlowError('Invalid or already used verification code.')
+        raise RegulatedFlowError('Invalid, expired, or already used verification code.')
 
     row.is_used = True
     row.save(update_fields=['is_used'])

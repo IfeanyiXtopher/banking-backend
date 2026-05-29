@@ -1,0 +1,7 @@
+Hi {{ user.full_name }},
+
+We confirmed receipt of your payment for {{ fee_name|default:"your compliance fee" }}.
+
+What happens next: we will email you a verification code when it is ready. Enter that code in SafaPay to complete this step.
+
+Questions? Contact {{ support_email }}.

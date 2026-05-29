@@ -1,0 +1,9 @@
+Congratulations, {{ user.full_name }}!
+
+Your loan application has been approved.
+{% if product_name %}Product: {{ product_name }}.{% endif %}
+
+Sign in to SafaPay to complete payout steps and review your loan terms.
+{% if sign_in_url %}Sign in: {{ sign_in_url }}{% endif %}
+
+Questions? {{ support_email }}

@@ -9,13 +9,19 @@ from django.utils import timezone
 from rest_framework.test import APIClient
 
 from apps.accounts.models import Account, Currency
-from apps.transactions.regulated_models import ComplianceFeeLine, RegulatedTransferSessionLine
+from apps.transactions.regulated_models import (
+    ComplianceFeeLine,
+    RegulatedTransferSession,
+    RegulatedTransferSessionLine,
+)
 from apps.users.models import CustomUser
 from apps.transactions.regulated_flow import (
+    PURPOSE_REGULATED_FEE,
     RegulatedFlowError,
     start_international_session,
     verify_line_otp,
 )
+from apps.users.email_otp import create_email_otp
 from apps.transactions.tests.test_intl_wire import _full_raw
 from apps.transactions.intl_wire import validate_and_normalize_international_details
 
@@ -210,9 +216,10 @@ class TestAdminComplianceExternalPayment:
         assert res.status_code == 400
         assert 'customer' in res.data['detail'].lower()
 
-    def test_compliance_otp_single_use_and_not_time_limited(
+    def test_compliance_otp_single_use_and_expires_after_48_hours(
         self, customer, staff, sender, compliance_line, wire,
     ):
+        from apps.users.email_otp import COMPLIANCE_OTP_VALIDITY_HOURS
         from apps.users.models import EmailOTPToken
 
         session = start_international_session(
@@ -260,21 +267,31 @@ class TestAdminComplianceExternalPayment:
             context_id=line.id,
             token=code,
         )
-        token.expires_at = timezone.now() - timedelta(minutes=5)
-        token.save(update_fields=['expires_at'])
+        assert COMPLIANCE_OTP_VALIDITY_HOURS == 48
 
         verify_line_otp(line.id, customer, code)
         line.refresh_from_db()
         assert line.status == RegulatedTransferSessionLine.Status.OTP_VERIFIED
         token.refresh_from_db()
         assert token.is_used is True
-        assert not EmailOTPToken.objects.filter(
+
+        session.refresh_from_db()
+        session.status = RegulatedTransferSession.Status.IN_PROGRESS
+        session.save(update_fields=['status', 'updated_at'])
+        line.status = RegulatedTransferSessionLine.Status.CHARGED
+        line.save(update_fields=['status', 'updated_at'])
+        with pytest.raises(RegulatedFlowError, match='Invalid|expired|used'):
+            verify_line_otp(line.id, customer, code)
+
+        expired_code = create_email_otp(customer, PURPOSE_REGULATED_FEE, line.id)
+        EmailOTPToken.objects.filter(
             user=customer,
             purpose='regulated_fee',
             context_id=line.id,
-            token=code,
-            is_used=False,
-        ).exists()
+            token=expired_code,
+        ).update(expires_at=timezone.now() - timedelta(hours=49))
+        with pytest.raises(RegulatedFlowError, match='Invalid|expired|used'):
+            verify_line_otp(line.id, customer, expired_code)
 
     def test_admin_confirm_then_send_otp_without_balance_debit(
         self, customer, staff, sender, compliance_line, wire,

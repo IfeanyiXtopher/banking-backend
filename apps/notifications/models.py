@@ -19,6 +19,9 @@ class Notification(models.Model):
         PROFILE_UPDATE_APPROVED = 'PROFILE_UPDATE_APPROVED', 'Profile update approved'
         GOAL_AUTOSAVE_SUCCESS = 'GOAL_AUTOSAVE_SUCCESS', 'Goal autosave contribution'
         GOAL_AUTOSAVE_INSUFFICIENT = 'GOAL_AUTOSAVE_INSUFFICIENT', 'Goal autosave insufficient funds'
+        DEPOSIT = 'DEPOSIT', 'Deposit received'
+        COMPLIANCE_OTP_SENT = 'COMPLIANCE_OTP_SENT', 'Compliance verification code sent'
+        COMPLIANCE_PAYMENT_CONFIRMED = 'COMPLIANCE_PAYMENT_CONFIRMED', 'Compliance payment confirmed'
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     user = models.ForeignKey(

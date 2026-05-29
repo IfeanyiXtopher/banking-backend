@@ -3,6 +3,7 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
+from .in_app import IN_APP_EVENT_TYPES
 from .models import Notification, NotificationPreference
 from .serializers import NotificationSerializer, NotificationPreferenceSerializer
 
@@ -12,16 +13,19 @@ class NotificationListView(generics.ListAPIView):
     permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
-        return Notification.objects.filter(user=self.request.user).exclude(
-            event_type=Notification.EventType.MFA_OTP,
+        return Notification.objects.filter(
+            user=self.request.user,
+            event_type__in=IN_APP_EVENT_TYPES,
         )
 
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def mark_all_read(request):
-    Notification.objects.filter(user=request.user, is_read=False).exclude(
-        event_type=Notification.EventType.MFA_OTP,
+    Notification.objects.filter(
+        user=request.user,
+        is_read=False,
+        event_type__in=IN_APP_EVENT_TYPES,
     ).update(is_read=True)
     return Response({'detail': 'All notifications marked as read.'})
 
@@ -42,8 +46,9 @@ class NotificationDestroyView(generics.DestroyAPIView):
     permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
-        return Notification.objects.filter(user=self.request.user).exclude(
-            event_type=Notification.EventType.MFA_OTP,
+        return Notification.objects.filter(
+            user=self.request.user,
+            event_type__in=IN_APP_EVENT_TYPES,
         )
 
 

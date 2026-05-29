@@ -305,6 +305,6 @@ class EmailOTPToken(models.Model):
     def is_valid(self):
         if self.is_used:
             return False
-        if self.purpose == 'regulated_fee':
-            return True
+        if not self.expires_at:
+            return False
         return timezone.now() < self.expires_at

@@ -10,16 +10,30 @@ from django.conf import settings
 
 from .email_assets import send_branded_email
 from .email_layout import EMAIL_SUBJECTS, get_from_email, render_event_email
+from .in_app import IN_APP_EVENT_TYPES, build_in_app_notification, in_app_event_type_for_email
 
 logger = logging.getLogger(__name__)
 
-# Delivered by email only — never stored in the in-app notification center.
-EMAIL_ONLY_EVENT_TYPES = frozenset({'mfa_otp'})
+# Never stored in the in-app notification center (email only).
+EMAIL_ONLY_EVENT_TYPES = frozenset({
+    'mfa_otp',
+    'password_reset',
+    'registration',
+    'low_balance',
+    'loan_payment_due',
+    'loan_rejected',
+    'support_update',
+    'profile_update_approved',
+    'goal_autosave_success',
+    'goal_autosave_insufficient',
+    'statement_ready',
+    'security_alert',
+})
 
-# Re-export for code that imported EMAIL_SUBJECTS from services.
 __all__ = [
     'EMAIL_SUBJECTS',
     'EMAIL_ONLY_EVENT_TYPES',
+    'IN_APP_EVENT_TYPES',
     'send_email_notification',
     'send_transaction_notification',
     'queue_email_notification',
@@ -46,23 +60,31 @@ def send_email_notification(self, user_id: str, event_type: str, context: dict):
             fail_silently=False,
         )
 
-        if event_type in EMAIL_ONLY_EVENT_TYPES:
+        in_app_type = in_app_event_type_for_email(event_type, context)
+        highlight = build_in_app_notification(event_type, context)
+        if in_app_type and highlight and in_app_type in IN_APP_EVENT_TYPES:
+            bell_subject, bell_body = highlight
+            notif = Notification.objects.create(
+                user=user,
+                event_type=in_app_type,
+                subject=bell_subject,
+                body=bell_body,
+                email_status='SENT',
+            )
+            _push_notification_ws(
+                str(user.id),
+                {
+                    'id': str(notif.id),
+                    'subject': bell_subject,
+                    'body': bell_body,
+                    'event_type': in_app_type,
+                },
+            )
+        elif event_type not in EMAIL_ONLY_EVENT_TYPES:
+            logger.debug('No in-app notification for event %s (user %s)', event_type, user_id)
+        else:
             logger.info('Email-only notification sent for %s (user %s)', event_type, user_id)
-            return
-
-        notif = Notification.objects.create(
-            user=user,
-            event_type=event_type.upper(),
-            subject=subject,
-            body=text_body,
-            email_status='SENT',
-        )
-        _push_notification_ws(
-            str(user.id),
-            {'id': str(notif.id), 'subject': subject, 'event_type': event_type.upper()},
-        )
     except OSError as exc:
-        # DNS (gaierror), connection refused, etc. — retries will not help.
         logger.error('Email notification failed (network/DNS) for user %s: %s', user_id, exc, exc_info=True)
         raise
     except Exception as exc:

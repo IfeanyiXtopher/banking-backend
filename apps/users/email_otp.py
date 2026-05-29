@@ -19,8 +19,9 @@ OTP_PURPOSE_LABELS = {
     PURPOSE_REGULATED_FEE: 'Compliance fee verification',
 }
 
-# Compliance OTPs stay valid until used for that fee line (no time limit).
-COMPLIANCE_OTP_VALIDITY = timedelta(days=36500)
+# Compliance fee OTPs expire after 48 hours (single-use per fee line).
+COMPLIANCE_OTP_VALIDITY = timedelta(hours=48)
+COMPLIANCE_OTP_VALIDITY_HOURS = 48
 
 
 def otp_purpose_label(purpose: str) -> str:

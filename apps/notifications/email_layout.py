@@ -30,10 +30,12 @@ def get_from_email() -> str:
 
 
 EMAIL_SUBJECTS = {
-    'registration': 'Welcome to SafaPay Bank — Account Created',
-    'password_reset': 'Reset Your Password',
-    'mfa_otp': 'Your Verification Code',
-    'transaction': 'Transaction Alert',
+    'registration': 'Welcome to SafaPay Bank — Your account is ready',
+    'password_reset': 'Reset your SafaPay password',
+    'mfa_otp': 'Your SafaPay verification code',
+    'compliance_fee_otp': 'Your compliance verification code',
+    'compliance_payment_confirmed': 'Compliance payment confirmed',
+    'transaction': 'Transaction alert — SafaPay Bank',
     'low_balance': 'Low Balance Alert',
     'loan_approved': 'Loan Application Approved',
     'loan_rejected': 'Loan Application Update',
@@ -49,11 +51,21 @@ EMAIL_SUBJECTS = {
 
 def fallback_body(event_type: str, context: dict) -> str:
     if event_type == 'mfa_otp':
-        extra = context.get('fee_name')
-        base = f"Your verification code is: {context.get('otp')}. Valid for 5 minutes."
-        if extra:
-            return f"{extra}: {base}"
-        return base
+        label = context.get('otp_validity_label', '5 minutes')
+        return f"Your verification code is: {context.get('otp')}. Valid for {label}."
+    if event_type == 'compliance_fee_otp':
+        hours = context.get('valid_hours', 48)
+        fee = context.get('fee_name') or 'compliance fee'
+        return (
+            f"Your verification code for {fee} is: {context.get('otp')}. "
+            f"Valid for {hours} hours. Do not share this code."
+        )
+    if event_type == 'compliance_payment_confirmed':
+        fee = context.get('fee_name') or 'compliance fee'
+        return (
+            f"We confirmed receipt of your {fee} payment. "
+            "You will receive a verification code by email when it is ready."
+        )
     if event_type == 'password_reset':
         return f"Click the link to reset your password: {context.get('token')}"
     if event_type == 'transaction':
@@ -78,6 +90,12 @@ def fallback_body(event_type: str, context: dict) -> str:
             f"({context.get('plan_label')}) — available in your primary account is only "
             f"{context.get('available_balance')}. Add funds to your primary account to keep "
             'this goal on track.'
+        )
+    if event_type == 'loan_approved':
+        product = context.get('product_name') or context.get('loan_type') or 'loan'
+        return (
+            f"Congratulations! Your {product} application was approved. "
+            'Sign in to SafaPay to continue.'
         )
     if event_type == 'support_update':
         return (
@@ -170,6 +188,14 @@ def render_event_email(event_type: str, context: dict) -> tuple[str, str, str]:
     """
     subject = EMAIL_SUBJECTS.get(event_type, 'SafaPay Bank Notification')
     ctx = {**get_email_brand_context(), **context, 'email_subject': subject}
+    if event_type == 'mfa_otp':
+        validity_sec = int(getattr(settings, 'OTP_EMAIL_TOKEN_VALIDITY', 300))
+        if validity_sec >= 60:
+            ctx['otp_validity_label'] = f'{max(1, validity_sec // 60)} minutes'
+        else:
+            ctx['otp_validity_label'] = f'{validity_sec} seconds'
+    if event_type == 'compliance_fee_otp':
+        ctx.setdefault('valid_hours', 48)
 
     try:
         inner_text = render_to_string(f'emails/{event_type}.txt', ctx)

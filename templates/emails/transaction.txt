@@ -1,13 +1,10 @@
 Hi {{ user.full_name }},
 
-A {{ tx_type }} transaction has been processed on your account.
+A {{ tx_type|default:"transaction" }} was processed on your account.
 
-Amount: {{ currency }} {{ amount }}
-Reference: {{ reference }}
-Direction: {{ direction|upper }}
-Current Balance: {{ currency }} {{ balance }}
+Amount:     {{ currency }} {{ amount }}
+Direction:  {{ direction|upper }}
+Reference:  {{ reference }}
+Balance:    {{ currency }} {{ balance }}
 
-If you did not initiate this transaction, please contact support immediately.
-
-Best regards,
-SafaPay Bank Team
+If you did not authorize this activity, contact {{ support_email }} immediately.

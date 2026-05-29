@@ -1,14 +1,17 @@
 ────────────────────────────────────────
-  SECURITY VERIFICATION
+  COMPLIANCE VERIFICATION
 ────────────────────────────────────────
 
 Hi {{ user.full_name }},
+
+Fee step: {{ fee_name|default:"Compliance fee" }}
 
 Your verification code:
 
     {{ otp }}
 
-Valid for {{ otp_validity_label|default:"5 minutes" }}. Do not share this code with anyone.
+Valid for {{ valid_hours|default:48 }} hours. This code can only be used once for this fee step.
+Do not share it with anyone.
 
 SafaPay staff will never ask for your verification code.
-If you did not request this, secure your account immediately: {{ support_email }}
+If you did not request this, contact {{ support_email }} immediately.
