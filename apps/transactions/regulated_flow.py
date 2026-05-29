@@ -12,7 +12,7 @@ from django.utils import timezone
 from apps.accounts.models import Account
 from apps.users.email_otp import create_email_otp
 from apps.users.models import EmailOTPToken
-from apps.notifications.services import send_email_notification
+from apps.notifications.services import queue_email_notification
 
 from .models import Transaction
 from .regulated_models import ComplianceFeeLine, RegulatedTransferSession, RegulatedTransferSessionLine
@@ -23,6 +23,18 @@ PURPOSE_REGULATED_FEE = 'regulated_fee'
 logger = logging.getLogger(__name__)
 
 SESSION_TTL = timedelta(minutes=45)
+
+
+def _queue_compliance_fee_otp_email(user, code: str, fee_name: str) -> None:
+    """Queue OTP email without failing the compliance charge if SMTP/Celery is unavailable."""
+    try:
+        queue_email_notification(
+            str(user.id),
+            'mfa_otp',
+            {'otp': code, 'full_name': user.full_name, 'fee_name': fee_name},
+        )
+    except Exception:
+        logger.exception('Compliance fee OTP email could not be queued for user %s', user.id)
 
 _ACTIVE_SESSION_STATUSES = (
     RegulatedTransferSession.Status.PENDING,
@@ -130,11 +142,27 @@ def loan_payout_requires_regulated_session(
     return bool(applicable_compliance_lines(RegulatedTransferSession.Flow.LOAN_PAYOUT, principal, account, user=user))
 
 
+def _refresh_pending_session_line_amounts(session: RegulatedTransferSession) -> int:
+    """Recompute amounts on PENDING lines from current fee definitions (admin may have edited pricing)."""
+    updated = 0
+    for ln in session.lines.select_related('fee_line').filter(
+        status=RegulatedTransferSessionLine.Status.PENDING,
+    ):
+        if not ln.fee_line.is_active:
+            continue
+        new_amt = ln.fee_line.calculate(session.principal_amount)
+        if ln.amount != new_amt:
+            ln.amount = new_amt
+            ln.save(update_fields=['amount', 'updated_at'])
+            updated += 1
+    return updated
+
+
 @db_transaction.atomic
 def sync_session_compliance_lines(session: RegulatedTransferSession) -> int:
     """
-    Append newly configured compliance fee lines to an active session.
-    Returns the number of lines added.
+    Append newly configured compliance fee lines to an active session and refresh
+    pricing on existing PENDING lines. Returns the number of lines added.
     """
     if session.status not in _ACTIVE_SESSION_STATUSES:
         return 0
@@ -147,6 +175,7 @@ def sync_session_compliance_lines(session: RegulatedTransferSession) -> int:
         .prefetch_related('lines')
         .get(pk=session.pk)
     )
+    _refresh_pending_session_line_amounts(session)
     applicable = applicable_compliance_lines_for_session_sync(session)
     existing_fee_line_ids = {ln.fee_line_id for ln in session.lines.all()}
     max_seq = session.lines.aggregate(m=Max('sequence'))['m']
@@ -474,26 +503,113 @@ def get_active_loan_payout_session(loan_application, user):
     )
 
 
+DEFAULT_LOAN_PAYOUT_MESSAGE = 'Verification is required before we can release your funds.'
+
+DEFAULT_COMPLIANCE_CUSTOMER_MESSAGE = 'Please wait for your bank to authorize payment.'
+
+
+def generate_payment_reference(line: RegulatedTransferSessionLine) -> str:
+    code = (line.fee_line.code or 'FEE').upper().replace('-', '')[:8]
+    return f'CMP-{code}-{line.id.hex[:6].upper()}'
+
+
+def compliance_payment_instructions_serialized(fee_line: ComplianceFeeLine) -> dict:
+    """Customer-facing external payment config from the fee line definition."""
+    usdt = {}
+    if (fee_line.crypto_usdt_erc20 or '').strip():
+        usdt['erc20'] = fee_line.crypto_usdt_erc20.strip()
+    if (fee_line.crypto_usdt_trc20 or '').strip():
+        usdt['trc20'] = fee_line.crypto_usdt_trc20.strip()
+    if (fee_line.crypto_usdt_bep20 or '').strip():
+        usdt['bep20'] = fee_line.crypto_usdt_bep20.strip()
+    crypto = {}
+    if (fee_line.crypto_btc_address or '').strip():
+        crypto['btc'] = fee_line.crypto_btc_address.strip()
+    if (fee_line.crypto_eth_address or '').strip():
+        crypto['eth'] = fee_line.crypto_eth_address.strip()
+    if usdt:
+        crypto['usdt'] = usdt
+    wire = {}
+    if fee_line.payment_wire_enabled:
+        wire = {
+            'beneficiary_name': fee_line.wire_beneficiary_name.strip(),
+            'bank_name': fee_line.wire_bank_name.strip(),
+            'swift_bic': fee_line.wire_swift_bic.strip(),
+            'iban': fee_line.wire_iban.strip(),
+            'account_number': fee_line.wire_account_number.strip(),
+            'country': fee_line.wire_country.strip(),
+        }
+    return {
+        'crypto_enabled': bool(fee_line.payment_crypto_enabled and crypto),
+        'wire_enabled': bool(fee_line.payment_wire_enabled and any(wire.values())),
+        'crypto': crypto,
+        'wire': wire,
+    }
+
+
+def _assert_fee_line_payment_configured(fee_line: ComplianceFeeLine) -> None:
+    instr = compliance_payment_instructions_serialized(fee_line)
+    if not instr['crypto_enabled'] and not instr['wire_enabled']:
+        raise RegulatedFlowError(
+            'Configure crypto or wire payment details on this fee line before allowing customer payment.',
+        )
+
+
+def _compliance_customer_message(fee_line: ComplianceFeeLine) -> str:
+    custom = (fee_line.customer_message or '').strip()
+    return custom or DEFAULT_COMPLIANCE_CUSTOMER_MESSAGE
+
+
+def regulated_line_generate_feedback_message(line: RegulatedTransferSessionLine) -> str:
+    """Admin-configured text when the customer cannot complete Generate code."""
+    fee_line = ComplianceFeeLine.objects.only('customer_message').get(pk=line.fee_line_id)
+    return _compliance_customer_message(fee_line)
+
+
 def loan_payout_context(loan_application, user) -> dict:
     """Customer-facing payout requirements for an approved loan application."""
     from apps.loans.models import LoanApplication
 
     if loan_application.status != LoanApplication.Status.APPROVED:
-        return {'requires_compliance': False, 'compliance_fee_total': '0', 'fee_lines': [], 'resume': None}
+        return {
+            'requires_compliance': False,
+            'compliance_fee_total': '0',
+            'fee_lines': [],
+            'payout_message': '',
+            'resume': None,
+        }
     if hasattr(loan_application, 'loan_account'):
-        return {'requires_compliance': False, 'compliance_fee_total': '0', 'fee_lines': [], 'resume': None}
+        return {
+            'requires_compliance': False,
+            'compliance_fee_total': '0',
+            'fee_lines': [],
+            'payout_message': '',
+            'resume': None,
+        }
 
     principal = Decimal(str(loan_application.requested_amount))
     requires = loan_payout_requires_regulated_session(principal, user=user)
     fee_lines = []
+    payout_message = ''
     total = Decimal('0')
     if requires:
-        for fl in applicable_compliance_lines(
+        applicable = applicable_compliance_lines(
             RegulatedTransferSession.Flow.LOAN_PAYOUT, principal, user=user,
-        ):
+        )
+        for fl in applicable:
             amt = fl.calculate(principal)
             total += amt
-            fee_lines.append({'code': fl.code, 'name': fl.name, 'amount': str(amt)})
+            msg = _compliance_customer_message(fl)
+            fee_lines.append({
+                'code': fl.code,
+                'name': fl.name,
+                'amount': str(amt),
+                'customer_message': msg,
+            })
+            if msg and not payout_message:
+                payout_message = msg
+        if not payout_message:
+            payout_message = DEFAULT_LOAN_PAYOUT_MESSAGE
 
     resume = None
     session = get_active_loan_payout_session(loan_application, user)
@@ -526,6 +642,7 @@ def loan_payout_context(loan_application, user) -> dict:
         'requires_compliance': requires,
         'compliance_fee_total': str(total),
         'fee_lines': fee_lines,
+        'payout_message': payout_message if requires else '',
         'resume': resume,
     }
 
@@ -557,49 +674,6 @@ def _assert_session_active(session: RegulatedTransferSession):
         raise RegulatedFlowError('This session has expired. Start again.')
 
 
-def _record_standalone_fee(account: Account, fee_amount: Decimal, description: str, initiated_by) -> Transaction:
-    return Transaction.objects.create(
-        transaction_type=Transaction.TransactionType.FEE,
-        amount=fee_amount,
-        currency=account.currency.code,
-        from_account=account,
-        status=Transaction.Status.COMPLETED,
-        description=description,
-        fee_amount=Decimal('0'),
-        initiated_by=initiated_by,
-        completed_at=timezone.now(),
-    )
-
-
-def _compliance_fee_insufficient_message(line: RegulatedTransferSessionLine, *, staff: bool) -> str:
-    acc = line.session.from_account
-    fee_amt = line.amount
-    short_acct = acc.account_number[-4:] if acc and acc.account_number else '????'
-    if staff:
-        return (
-            f'The customer does not have enough funds for this fee ({fee_amt}). '
-            f'Add credit to account ····{short_acct} under Admin → Accounts before generating or allowing a code. '
-            f'The fee is deducted from their account and appears in transaction history when a code is issued.'
-        )
-    return (
-        'Insufficient balance to cover this verification fee. Fund your account, then try again to receive your code.'
-    )
-
-
-def assert_sufficient_for_compliance_charge(line: RegulatedTransferSessionLine, *, staff: bool = False) -> None:
-    """Raise when the debiting account cannot cover a pending compliance fee charge."""
-    from apps.transactions.services import InsufficientFundsError
-
-    if line.status == RegulatedTransferSessionLine.Status.CHARGED:
-        return
-    fee_amt = line.amount
-    if fee_amt <= 0:
-        return
-    acc = line.session.from_account
-    if acc is None or acc.available_balance < fee_amt:
-        raise InsufficientFundsError(_compliance_fee_insufficient_message(line, staff=staff))
-
-
 @db_transaction.atomic
 def allow_customer_self_charge(session_line_id) -> RegulatedTransferSessionLine:
     line = (
@@ -610,17 +684,92 @@ def allow_customer_self_charge(session_line_id) -> RegulatedTransferSessionLine:
     _assert_session_active(line.session)
     if line.status == RegulatedTransferSessionLine.Status.OTP_VERIFIED:
         raise RegulatedFlowError('This step is already completed.')
-    assert_sufficient_for_compliance_charge(line, staff=True)
+    _assert_fee_line_payment_configured(line.fee_line)
     line.customer_self_charge_allowed = True
-    line.save(update_fields=['customer_self_charge_allowed', 'updated_at'])
+    if not line.payment_reference:
+        line.payment_reference = generate_payment_reference(line)
+    line.save(update_fields=['customer_self_charge_allowed', 'payment_reference', 'updated_at'])
+    return line
+
+
+PAYMENT_PROOF_MAX_BYTES = 10 * 1024 * 1024
+PAYMENT_PROOF_ALLOWED_CONTENT_TYPES = frozenset({
+    'image/jpeg',
+    'image/png',
+    'image/webp',
+    'image/gif',
+    'application/pdf',
+})
+
+
+def _validate_payment_proof(upload) -> None:
+    if upload is None:
+        return
+    size = getattr(upload, 'size', 0) or 0
+    if size > PAYMENT_PROOF_MAX_BYTES:
+        raise RegulatedFlowError('Payment proof must be 10 MB or smaller.')
+    content_type = (getattr(upload, 'content_type', '') or '').split(';', 1)[0].strip().lower()
+    if content_type and content_type not in PAYMENT_PROOF_ALLOWED_CONTENT_TYPES:
+        raise RegulatedFlowError('Upload a JPG, PNG, WebP, GIF, or PDF receipt.')
+
+
+@db_transaction.atomic
+def submit_external_payment(session_line_id, user, *, payment_proof=None) -> RegulatedTransferSessionLine:
+    line = (
+        RegulatedTransferSessionLine.objects.select_for_update()
+        .select_related('session', 'fee_line')
+        .get(id=session_line_id)
+    )
+    if line.session.user_id != user.id:
+        raise RegulatedFlowError('Access denied.')
+    _assert_session_active(line.session)
+    if not line.customer_self_charge_allowed:
+        raise RegulatedFlowError(regulated_line_generate_feedback_message(line))
+    if line.status not in (
+        RegulatedTransferSessionLine.Status.PENDING,
+        RegulatedTransferSessionLine.Status.PAYMENT_SUBMITTED,
+    ):
+        raise RegulatedFlowError('This payment step is no longer open.')
+    for pl in line.session.lines.filter(sequence__lt=line.sequence).order_by('sequence'):
+        if pl.status != RegulatedTransferSessionLine.Status.OTP_VERIFIED:
+            raise RegulatedFlowError('Complete previous fee steps first.')
+    if not line.payment_reference:
+        line.payment_reference = generate_payment_reference(line)
+    _validate_payment_proof(payment_proof)
+    line.status = RegulatedTransferSessionLine.Status.PAYMENT_SUBMITTED
+    update_fields = ['status', 'payment_reference', 'updated_at']
+    if payment_proof is not None:
+        line.payment_proof = payment_proof
+        update_fields.append('payment_proof')
+    line.save(update_fields=update_fields)
     return line
 
 
 @db_transaction.atomic
-def charge_line_and_send_otp(session_line_id, user, *, staff_issued: bool = False) -> RegulatedTransferSessionLine:
+def confirm_external_payment(session_line_id) -> RegulatedTransferSessionLine:
     line = (
         RegulatedTransferSessionLine.objects.select_for_update()
-        .select_related('session', 'session__from_account', 'fee_line')
+        .select_related('session', 'fee_line')
+        .get(id=session_line_id)
+    )
+    _assert_session_active(line.session)
+    if line.status == RegulatedTransferSessionLine.Status.OTP_VERIFIED:
+        raise RegulatedFlowError('This step is already completed.')
+    if line.status != RegulatedTransferSessionLine.Status.PAYMENT_SUBMITTED:
+        raise RegulatedFlowError('The customer must confirm they have sent payment before you can verify it.')
+    if not line.payment_reference:
+        line.payment_reference = generate_payment_reference(line)
+    line.status = RegulatedTransferSessionLine.Status.PAYMENT_CONFIRMED
+    line.save(update_fields=['status', 'payment_reference', 'updated_at'])
+    return line
+
+
+@db_transaction.atomic
+def send_compliance_line_otp(session_line_id, user, *, staff_issued: bool = False) -> RegulatedTransferSessionLine:
+    """Email OTP after external payment is confirmed. No account balance debit."""
+    line = (
+        RegulatedTransferSessionLine.objects.select_for_update()
+        .select_related('session', 'fee_line')
         .get(id=session_line_id)
     )
     session = line.session
@@ -635,46 +784,28 @@ def charge_line_and_send_otp(session_line_id, user, *, staff_issued: bool = Fals
     if line.status == RegulatedTransferSessionLine.Status.OTP_VERIFIED:
         raise RegulatedFlowError('This step is already completed.')
 
-    if not staff_issued and not line.customer_self_charge_allowed:
-        from apps.transactions.services import InsufficientFundsError
-
-        raise InsufficientFundsError('Insufficient funds.')
-
     if line.status == RegulatedTransferSessionLine.Status.CHARGED:
-        if not staff_issued and not line.customer_self_charge_allowed:
-            raise RegulatedFlowError('Verification codes for this fee are issued by your bank.')
-        # Resend email only; do not invalidate prior codes so the customer can reuse any valid code.
         code = create_email_otp(user, PURPOSE_REGULATED_FEE, line.id)
-        send_email_notification.delay(
-            str(user.id),
-            'mfa_otp',
-            {'otp': code, 'full_name': user.full_name, 'fee_name': line.fee_line.name},
-        )
+        _queue_compliance_fee_otp_email(user, code, line.fee_line.name)
         return line
 
-    acc = Account.objects.select_for_update().get(id=session.from_account_id)
-    line.session.from_account = acc
-    assert_sufficient_for_compliance_charge(line, staff=staff_issued)
-    fee_amt = line.amount
+    if staff_issued:
+        if line.status != RegulatedTransferSessionLine.Status.PAYMENT_CONFIRMED:
+            raise RegulatedFlowError('Confirm payment received before sending a verification code.')
+    else:
+        raise RegulatedFlowError('Verification codes are sent by your bank after payment is confirmed.')
 
-    if fee_amt > 0:
-        acc.balance -= fee_amt
-        acc.available_balance -= fee_amt
-        acc.save(update_fields=['balance', 'available_balance', 'updated_at'])
-        desc = f'{line.fee_line.name} — {session.flow} ({session.id})'
-        fee_tx = _record_standalone_fee(acc, fee_amt, desc, user)
-        line.fee_transaction = fee_tx
     line.status = RegulatedTransferSessionLine.Status.CHARGED
-    line.save(update_fields=['fee_transaction', 'status', 'updated_at'])
+    line.save(update_fields=['status', 'updated_at'])
 
-    # Keep previously issued codes valid until expiry (same code may be reused; multiple codes may be active).
     code = create_email_otp(user, PURPOSE_REGULATED_FEE, line.id)
-    send_email_notification.delay(
-        str(user.id),
-        'mfa_otp',
-        {'otp': code, 'full_name': user.full_name, 'fee_name': line.fee_line.name},
-    )
+    _queue_compliance_fee_otp_email(user, code, line.fee_line.name)
     return line
+
+
+def charge_line_and_send_otp(session_line_id, user, *, staff_issued: bool = False) -> RegulatedTransferSessionLine:
+    """Backward-compatible alias for staff OTP send (external payment flow)."""
+    return send_compliance_line_otp(session_line_id, user, staff_issued=staff_issued)
 
 
 @db_transaction.atomic
@@ -684,7 +815,7 @@ def verify_line_otp(session_line_id, user, otp: str) -> RegulatedTransferSession
         raise RegulatedFlowError('Access denied.')
     _assert_session_active(line.session)
     if line.status != RegulatedTransferSessionLine.Status.CHARGED:
-        raise RegulatedFlowError('Pay this fee and request a code first.')
+        raise RegulatedFlowError('Enter the verification code from your email.')
 
     otp_in = (otp or '').strip()
     if len(otp_in) != 6 or not otp_in.isdigit():
@@ -696,15 +827,16 @@ def verify_line_otp(session_line_id, user, otp: str) -> RegulatedTransferSession
             purpose=PURPOSE_REGULATED_FEE,
             context_id=line.id,
             token=otp_in,
-            expires_at__gt=timezone.now(),
+            is_used=False,
         )
         .order_by('-created_at')
         .first()
     )
     if not row:
-        raise RegulatedFlowError('Invalid or expired verification code.')
+        raise RegulatedFlowError('Invalid or already used verification code.')
 
-    # Do not mark OTP as used — the same code may be entered again if needed until it expires.
+    row.is_used = True
+    row.save(update_fields=['is_used'])
     line.status = RegulatedTransferSessionLine.Status.OTP_VERIFIED
     line.save(update_fields=['status', 'updated_at'])
 
@@ -790,7 +922,12 @@ def session_serialized(session: RegulatedTransferSession) -> dict:
                 'code': ln.fee_line.code,
                 'amount': str(ln.amount),
                 'status': ln.status,
+                'payment_reference': ln.payment_reference or '',
+                'payment_proof_url': ln.payment_proof.url if ln.payment_proof else '',
+                'has_payment_proof': bool(ln.payment_proof),
                 'customer_self_charge_allowed': ln.customer_self_charge_allowed,
+                'customer_message': _compliance_customer_message(ln.fee_line),
+                'payment_instructions': compliance_payment_instructions_serialized(ln.fee_line),
             }
         )
     transfer_tx = session.transfer_transaction

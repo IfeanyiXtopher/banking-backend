@@ -25,6 +25,11 @@ urlpatterns = [
         name='regulated-session-complete-transfer',
     ),
     path(
+        'regulated-sessions/<uuid:session_id>/lines/<uuid:line_id>/submit-payment/',
+        regulated_views.regulated_line_submit_payment,
+        name='regulated-line-submit-payment',
+    ),
+    path(
         'regulated-sessions/<uuid:session_id>/lines/<uuid:line_id>/charge-send-otp/',
         regulated_views.regulated_line_charge_send_otp,
         name='regulated-line-charge-send-otp',

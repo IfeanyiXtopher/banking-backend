@@ -25,6 +25,7 @@ from .services import (
 )
 from .regulated_flow import (
     RegulatedFlowError,
+    regulated_line_generate_feedback_message,
     session_serialized,
     start_international_session,
     start_loan_payout_session,
@@ -181,38 +182,63 @@ def regulated_session_detail(request, session_id):
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
-def regulated_line_charge_send_otp(request, session_id, line_id):
+def regulated_line_submit_payment(request, session_id, line_id):
     from .regulated_models import RegulatedTransferSessionLine
+    from .regulated_flow import RegulatedFlowError, session_serialized, submit_external_payment
 
     try:
-        line = RegulatedTransferSessionLine.objects.select_related('session').get(
+        line = RegulatedTransferSessionLine.objects.select_related('session', 'fee_line').get(
             id=line_id,
             session_id=session_id,
             session__user=request.user,
         )
     except RegulatedTransferSessionLine.DoesNotExist:
         return Response({'detail': 'Fee line not found.'}, status=status.HTTP_404_NOT_FOUND)
-    from .regulated_flow import RegulatedFlowError, charge_line_and_send_otp
 
     try:
-        charge_line_and_send_otp(line.id, request.user)
-    except InsufficientFundsError as e:
-        return Response({'detail': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+        payment_proof = request.FILES.get('payment_proof')
+        submit_external_payment(line.id, request.user, payment_proof=payment_proof)
     except RegulatedFlowError as e:
         return Response({'detail': str(e)}, status=status.HTTP_400_BAD_REQUEST)
-    line.refresh_from_db()
+
+    line.session.refresh_from_db()
     return Response(
         {
-            'detail': 'Fee processed where applicable and verification code sent to your email.',
-            'line': {
-                'id': str(line.id),
-                'status': line.status,
-                'amount': str(line.amount),
-                'name': line.fee_line.name,
-            },
+            'detail': 'Payment submitted. We will email your verification code once confirmed.',
+            'session': session_serialized(line.session),
         },
         status=status.HTTP_200_OK,
     )
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def regulated_line_charge_send_otp(request, session_id, line_id):
+    """Resend OTP when line is already CHARGED."""
+    from .regulated_models import RegulatedTransferSessionLine
+    from .regulated_flow import RegulatedFlowError, send_compliance_line_otp
+
+    try:
+        line = RegulatedTransferSessionLine.objects.select_related('session', 'fee_line').get(
+            id=line_id,
+            session_id=session_id,
+            session__user=request.user,
+        )
+    except RegulatedTransferSessionLine.DoesNotExist:
+        return Response({'detail': 'Fee line not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+    if line.status != RegulatedTransferSessionLine.Status.CHARGED:
+        return Response(
+            {'detail': 'Your verification code will be sent after payment is confirmed.'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    try:
+        send_compliance_line_otp(line.id, request.user, staff_issued=False)
+    except RegulatedFlowError as e:
+        return Response({'detail': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+    return Response({'detail': 'Verification code resent to your email.'}, status=status.HTTP_200_OK)
 
 
 @api_view(['POST'])

@@ -304,6 +304,11 @@ class EmailOTPTokenAdminSerializer(serializers.ModelSerializer):
 
     def get_is_expired(self, obj):
         from django.utils import timezone
+
+        from .email_otp import PURPOSE_REGULATED_FEE
+
+        if obj.purpose == PURPOSE_REGULATED_FEE:
+            return False
         if not obj.expires_at:
             return True
         return obj.expires_at < timezone.now()

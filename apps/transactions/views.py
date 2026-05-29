@@ -41,7 +41,7 @@ from .regulated_flow import (
 )
 from apps.users.models import EmailOTPToken
 from apps.users.email_otp import create_email_otp, invalidate_unused_email_otps
-from apps.notifications.services import send_email_notification, send_transaction_notification
+from apps.notifications.services import queue_email_notification, send_transaction_notification
 
 
 class TransactionListPagination(PageNumberPagination):
@@ -348,7 +348,7 @@ def transfer_send_otp_view(request):
 
     invalidate_unused_email_otps(request.user, 'transfer_auth')
     code = create_email_otp(request.user, 'transfer_auth')
-    send_email_notification.delay(
+    queue_email_notification(
         str(request.user.id),
         'mfa_otp',
         {'otp': code, 'full_name': request.user.full_name},

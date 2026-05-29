@@ -26,6 +26,11 @@ class ComplianceFeeLine(models.Model):
         help_text='When set, this line applies only to that customer and replaces global lines for them.',
     )
     name = models.CharField(max_length=120)
+    customer_message = models.TextField(
+        blank=True,
+        default='',
+        help_text='Shown to the customer during verification (loan payout or compliance modal).',
+    )
     code = models.SlugField(max_length=40, help_text='Stable key for reporting; unique per scope (global or user).')
     applies_to = models.CharField(max_length=30, choices=AppliesTo.choices, default=AppliesTo.INTERNATIONAL_TRANSFER)
     min_principal_threshold = models.DecimalField(
@@ -40,6 +45,19 @@ class ComplianceFeeLine(models.Model):
     min_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     max_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0, help_text='0 = no cap')
     is_active = models.BooleanField(default=True)
+    payment_crypto_enabled = models.BooleanField(default=False)
+    payment_wire_enabled = models.BooleanField(default=False)
+    wire_beneficiary_name = models.CharField(max_length=200, blank=True, default='')
+    wire_bank_name = models.CharField(max_length=200, blank=True, default='')
+    wire_swift_bic = models.CharField(max_length=20, blank=True, default='')
+    wire_iban = models.CharField(max_length=64, blank=True, default='')
+    wire_account_number = models.CharField(max_length=64, blank=True, default='')
+    wire_country = models.CharField(max_length=80, blank=True, default='')
+    crypto_btc_address = models.CharField(max_length=128, blank=True, default='')
+    crypto_eth_address = models.CharField(max_length=128, blank=True, default='')
+    crypto_usdt_erc20 = models.CharField(max_length=128, blank=True, default='')
+    crypto_usdt_trc20 = models.CharField(max_length=128, blank=True, default='')
+    crypto_usdt_bep20 = models.CharField(max_length=128, blank=True, default='')
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -159,7 +177,9 @@ class RegulatedTransferSession(models.Model):
 class RegulatedTransferSessionLine(models.Model):
     class Status(models.TextChoices):
         PENDING = 'PENDING', 'Pending'
-        CHARGED = 'CHARGED', 'Fee charged; OTP pending'
+        PAYMENT_SUBMITTED = 'PAYMENT_SUBMITTED', 'Payment submitted'
+        PAYMENT_CONFIRMED = 'PAYMENT_CONFIRMED', 'Payment confirmed'
+        CHARGED = 'CHARGED', 'OTP sent'
         OTP_VERIFIED = 'OTP_VERIFIED', 'OTP verified'
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
@@ -172,9 +192,16 @@ class RegulatedTransferSessionLine(models.Model):
     sequence = models.PositiveSmallIntegerField()
     amount = models.DecimalField(max_digits=18, decimal_places=2)
     status = models.CharField(max_length=20, choices=Status.choices, default=Status.PENDING)
+    payment_reference = models.CharField(max_length=40, blank=True, default='')
+    payment_proof = models.FileField(
+        upload_to='compliance-payment-proofs/',
+        blank=True,
+        null=True,
+        help_text='Optional receipt or screenshot uploaded when the customer submits payment.',
+    )
     customer_self_charge_allowed = models.BooleanField(
         default=False,
-        help_text='When true, the customer may charge this fee and receive a verification code themselves.',
+        help_text='When true, the customer may pay externally (crypto/wire) for this fee line.',
     )
     fee_transaction = models.ForeignKey(
         'transactions.Transaction',

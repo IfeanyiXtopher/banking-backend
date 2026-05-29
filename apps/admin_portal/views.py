@@ -20,8 +20,6 @@ logger = logging.getLogger(__name__)
 
 def _sync_sessions_after_compliance_line_change(instance, request_user) -> None:
     """Best-effort sync; failures are logged but must not fail the admin API response."""
-    if not instance.is_active:
-        return
     try:
         from apps.transactions.regulated_flow import sync_all_active_compliance_sessions
 
@@ -1061,12 +1059,7 @@ def admin_pending_compliance_sessions(request):
             ln = line_objs.get(line_payload['id'])
             if not ln:
                 continue
-            fee_amt = ln.amount
-            needs_charge = ln.status == RegulatedTransferSessionLine.Status.PENDING and fee_amt > 0
-            line_payload['requires_balance'] = needs_charge
-            line_payload['has_sufficient_balance'] = (
-                not needs_charge or (acc is not None and acc.available_balance >= fee_amt)
-            )
+            line_payload['payment_reference'] = ln.payment_reference or ''
         results.append(payload)
     return Response({'results': results})
 
@@ -1105,16 +1098,60 @@ def admin_pending_compliance_session_delete(request, session_id):
 
 @api_view(['POST'])
 @permission_classes([IsAdminUser])
+def admin_regulated_line_confirm_payment(request, session_id, line_id):
+    """Mark external compliance payment as received."""
+    from apps.transactions.regulated_flow import RegulatedFlowError, confirm_external_payment, session_serialized
+    from apps.transactions.regulated_models import RegulatedTransferSessionLine
+
+    try:
+        line = RegulatedTransferSessionLine.objects.select_related('session', 'session__user', 'fee_line').get(
+            id=line_id,
+            session_id=session_id,
+        )
+        sess = line.session
+        if sess.from_account_id:
+            assert_account_in_scope(request.user, sess.from_account_id)
+        else:
+            assert_owner_in_scope(request.user, sess.user_id)
+    except RegulatedTransferSessionLine.DoesNotExist:
+        return Response({'detail': 'Fee line not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+    try:
+        confirm_external_payment(line.id)
+    except RegulatedFlowError as e:
+        return Response({'detail': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+    line.refresh_from_db()
+    customer = line.session.user
+    log_action(
+        actor=request.user,
+        action=AuditLog.Action.UPDATE,
+        target_model='RegulatedTransferSessionLine',
+        target_id=line.id,
+        description=f'Staff confirmed compliance payment for {line.fee_line.name} ({customer.email}).',
+        ip_address=AuditMiddleware.get_client_ip(request),
+    )
+
+    return Response(
+        {
+            'detail': 'Payment confirmed. You may now send the verification code.',
+            'session': session_serialized(line.session),
+        },
+        status=status.HTTP_200_OK,
+    )
+
+
+@api_view(['POST'])
+@permission_classes([IsAdminUser])
 def admin_regulated_line_charge_send_otp(request, session_id, line_id):
-    """Charge compliance fee (if applicable) and email OTP to the customer; return code for admin desk."""
+    """Email OTP after payment is confirmed."""
     from apps.transactions.regulated_flow import (
         PURPOSE_REGULATED_FEE,
         RegulatedFlowError,
-        charge_line_and_send_otp,
+        send_compliance_line_otp,
         session_serialized,
     )
     from apps.transactions.regulated_models import RegulatedTransferSessionLine
-    from apps.transactions.services import InsufficientFundsError
 
     try:
         line = RegulatedTransferSessionLine.objects.select_related('session', 'session__user', 'fee_line').get(
@@ -1131,9 +1168,7 @@ def admin_regulated_line_charge_send_otp(request, session_id, line_id):
 
     customer = line.session.user
     try:
-        charge_line_and_send_otp(line.id, customer, staff_issued=True)
-    except InsufficientFundsError as e:
-        return Response({'detail': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+        send_compliance_line_otp(line.id, customer, staff_issued=True)
     except RegulatedFlowError as e:
         return Response({'detail': str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -1160,7 +1195,10 @@ def admin_regulated_line_charge_send_otp(request, session_id, line_id):
 
     return Response(
         {
-            'detail': 'Fee processed where applicable. Verification code sent to the customer email.',
+            'detail': (
+                'Verification code issued. It appears under Admin → Verification codes '
+                'if the customer did not receive email.'
+            ),
             'otp': otp_row.token if otp_row else None,
             'line': {
                 'id': str(line.id),
@@ -1202,8 +1240,6 @@ def admin_regulated_line_allow_customer_charge(request, session_id, line_id):
 
     try:
         allow_customer_self_charge(line.id)
-    except InsufficientFundsError as e:
-        return Response({'detail': str(e)}, status=status.HTTP_400_BAD_REQUEST)
     except RegulatedFlowError as e:
         return Response({'detail': str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -1220,7 +1256,7 @@ def admin_regulated_line_allow_customer_charge(request, session_id, line_id):
 
     return Response(
         {
-            'detail': 'Customer may now generate this fee code from their transfer.',
+            'detail': 'Customer may now pay this fee externally (crypto or wire).',
             'line': {
                 'id': str(line.id),
                 'status': line.status,

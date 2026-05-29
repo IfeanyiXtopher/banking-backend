@@ -73,6 +73,11 @@ urlpatterns = [
         name='admin-pending-compliance-session-delete',
     ),
     path(
+        'pending-compliance-sessions/<uuid:session_id>/lines/<uuid:line_id>/confirm-payment/',
+        views.admin_regulated_line_confirm_payment,
+        name='admin-regulated-line-confirm-payment',
+    ),
+    path(
         'pending-compliance-sessions/<uuid:session_id>/lines/<uuid:line_id>/charge-send-otp/',
         views.admin_regulated_line_charge_send_otp,
         name='admin-regulated-line-charge-send-otp',

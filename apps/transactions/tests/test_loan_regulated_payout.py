@@ -16,6 +16,9 @@ from apps.transactions.regulated_flow import (
     RegulatedFlowError,
     assert_loan_compliance_completed_if_required,
     charge_line_and_send_otp,
+    confirm_external_payment,
+    allow_customer_self_charge,
+    submit_external_payment,
     start_loan_payout_session,
     verify_line_otp,
 )
@@ -101,6 +104,11 @@ def loan_compliance_line(db):
         code='loan_settle',
         applies_to=ComplianceFeeLine.AppliesTo.LOAN_PAYOUT,
         flat_amount=Decimal('50.00'),
+        payment_wire_enabled=True,
+        wire_beneficiary_name='Compliance Desk',
+        wire_bank_name='Example Bank',
+        wire_swift_bic='EXAMUS33',
+        wire_iban='GB00EXAM123456',
     )
 
 
@@ -112,9 +120,9 @@ class TestLoanRegulatedPayout:
         session = start_loan_payout_session(customer, sender, approved_application)
         line = session.lines.first()
         assert line.customer_self_charge_allowed is False
-        from apps.transactions.services import InsufficientFundsError
+        from apps.transactions.regulated_flow import RegulatedFlowError
 
-        with pytest.raises(InsufficientFundsError):
+        with pytest.raises(RegulatedFlowError, match='confirmed'):
             charge_line_and_send_otp(line.id, customer)
 
     def test_full_payout_after_compliance(
@@ -126,11 +134,14 @@ class TestLoanRegulatedPayout:
         loan_compliance_line,
     ):
         with (
-            patch('apps.transactions.regulated_flow.send_email_notification'),
+            patch('apps.transactions.regulated_flow.queue_email_notification'),
             patch('apps.transactions.regulated_flow.create_email_otp', return_value='123456'),
         ):
             session = start_loan_payout_session(customer, sender, approved_application)
             line = session.lines.first()
+            allow_customer_self_charge(line.id)
+            submit_external_payment(line.id, customer)
+            confirm_external_payment(line.id)
             charge_line_and_send_otp(line.id, customer, staff_issued=True)
             EmailOTPToken.objects.create(
                 user=customer,

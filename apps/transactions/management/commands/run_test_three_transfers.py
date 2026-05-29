@@ -17,9 +17,12 @@ from apps.transactions.intl_wire import validate_and_normalize_international_det
 from apps.transactions.models import Transaction
 from apps.transactions.regulated_flow import (
     PURPOSE_REGULATED_FEE,
+    allow_customer_self_charge,
     charge_line_and_send_otp,
+    confirm_external_payment,
     mark_international_session_completed,
     start_international_session,
+    submit_external_payment,
     verify_line_otp,
 )
 from apps.transactions.services import (
@@ -145,7 +148,10 @@ class Command(BaseCommand):
             self.stdout.write(f'  Intl session {session.id} pending tx {pending.reference_number if pending else "—"}')
 
             for line in session.lines.order_by('sequence'):
-                charge_line_and_send_otp(line.id, user)
+                allow_customer_self_charge(line.id)
+                submit_external_payment(line.id, user)
+                confirm_external_payment(line.id)
+                charge_line_and_send_otp(line.id, user, staff_issued=True)
                 EmailOTPToken.objects.create(
                     user=user,
                     token='847291',

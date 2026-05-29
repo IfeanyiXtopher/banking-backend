@@ -16,6 +16,9 @@ from apps.transactions.regulated_flow import (
     start_international_session,
     verify_line_otp,
     charge_line_and_send_otp,
+    confirm_external_payment,
+    allow_customer_self_charge,
+    submit_external_payment,
     assert_session_ready_for_international_transfer,
     RegulatedFlowError,
 )
@@ -70,6 +73,11 @@ def compliance_line(db):
         flat_amount=Decimal('25.00'),
         sort_order=1,
         is_active=True,
+        payment_wire_enabled=True,
+        wire_beneficiary_name='Compliance Desk',
+        wire_bank_name='Example Bank',
+        wire_swift_bic='EXAMUS33',
+        wire_iban='GB00EXAM123456',
     )
 
 
@@ -118,7 +126,7 @@ class TestPendingInternationalTransfer:
         assert Transaction.objects.filter(id=tx.id, status=Transaction.Status.PENDING).exists()
         assert session.status == RegulatedTransferSession.Status.IN_PROGRESS
 
-    @patch('apps.transactions.regulated_flow.send_email_notification')
+    @patch('apps.transactions.regulated_flow.queue_email_notification')
     def test_complete_after_compliance_marks_completed_without_in_platform_credit(
         self,
         _mock_email,
@@ -138,8 +146,11 @@ class TestPendingInternationalTransfer:
             international_wire_details=wire,
         )
         line = session.lines.first()
+        allow_customer_self_charge(line.id)
+        submit_external_payment(line.id, user)
+        confirm_external_payment(line.id)
         with patch('apps.transactions.regulated_flow.create_email_otp', return_value='123456'):
-            charge_line_and_send_otp(line.id, user)
+            charge_line_and_send_otp(line.id, user, staff_issued=True)
         EmailOTPToken.objects.create(
             user=user,
             token='123456',

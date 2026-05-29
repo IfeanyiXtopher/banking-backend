@@ -14,7 +14,11 @@ from apps.transactions.regulated_flow import (
     start_loan_payout_session,
     sync_session_compliance_lines,
 )
-from apps.transactions.regulated_models import ComplianceFeeLine, RegulatedTransferSession
+from apps.transactions.regulated_models import (
+    ComplianceFeeLine,
+    RegulatedTransferSession,
+    RegulatedTransferSessionLine,
+)
 from apps.transactions.tests.test_intl_wire import _full_raw
 from apps.transactions.intl_wire import validate_and_normalize_international_details
 from apps.users.models import CustomUser
@@ -179,6 +183,35 @@ class TestSyncComplianceLines:
         added = sync_session_compliance_lines(session)
         assert added == 1
         assert session.lines.count() == 2
+
+    def test_pending_line_amount_refreshed_when_fee_pricing_changes(
+        self, customer, account, approved_application, first_line,
+    ):
+        session = start_loan_payout_session(customer, account, approved_application)
+        line = session.lines.first()
+        assert line.amount == Decimal('50.00')
+
+        first_line.flat_amount = Decimal('100.00')
+        first_line.save(update_fields=['flat_amount', 'updated_at'])
+
+        assert sync_session_compliance_lines(session) == 0
+        line.refresh_from_db()
+        assert line.amount == Decimal('100.00')
+
+    def test_charged_line_amount_not_refreshed(
+        self, customer, account, approved_application, first_line,
+    ):
+        session = start_loan_payout_session(customer, account, approved_application)
+        line = session.lines.first()
+        line.status = RegulatedTransferSessionLine.Status.CHARGED
+        line.save(update_fields=['status', 'updated_at'])
+
+        first_line.flat_amount = Decimal('999.00')
+        first_line.save(update_fields=['flat_amount', 'updated_at'])
+
+        sync_session_compliance_lines(session)
+        line.refresh_from_db()
+        assert line.amount == Decimal('50.00')
 
     def test_personal_fee_does_not_sync_to_global_intl_session(
         self, customer, account, wire,

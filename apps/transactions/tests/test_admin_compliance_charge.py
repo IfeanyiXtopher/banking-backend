@@ -1,18 +1,33 @@
-"""Staff-only compliance fee code generation."""
+"""Staff and customer compliance fee external payment flow."""
 import pytest
+from datetime import timedelta
 from decimal import Decimal
+from unittest.mock import patch
 from django.contrib.auth import get_user_model
 from django.urls import reverse
+from django.utils import timezone
 from rest_framework.test import APIClient
 
 from apps.accounts.models import Account, Currency
-from apps.transactions.regulated_models import ComplianceFeeLine
+from apps.transactions.regulated_models import ComplianceFeeLine, RegulatedTransferSessionLine
 from apps.users.models import CustomUser
-from apps.transactions.regulated_flow import start_international_session
+from apps.transactions.regulated_flow import (
+    RegulatedFlowError,
+    start_international_session,
+    verify_line_otp,
+)
 from apps.transactions.tests.test_intl_wire import _full_raw
 from apps.transactions.intl_wire import validate_and_normalize_international_details
 
 User = get_user_model()
+
+PAYMENT_LINE_KWARGS = {
+    'payment_wire_enabled': True,
+    'wire_beneficiary_name': 'Compliance Desk',
+    'wire_bank_name': 'Example Bank',
+    'wire_swift_bic': 'EXAMUS33',
+    'wire_iban': 'GB00EXAM123456',
+}
 
 
 @pytest.fixture
@@ -54,6 +69,7 @@ def compliance_line(db):
         code='aml',
         applies_to=ComplianceFeeLine.AppliesTo.INTERNATIONAL_TRANSFER,
         flat_amount=Decimal('25.00'),
+        **PAYMENT_LINE_KWARGS,
     )
 
 
@@ -63,8 +79,8 @@ def wire():
 
 
 @pytest.mark.django_db
-class TestAdminComplianceCharge:
-    def test_customer_charge_blocked(self, customer, sender, compliance_line, wire):
+class TestAdminComplianceExternalPayment:
+    def test_customer_submit_payment_blocked_when_not_allowed(self, customer, sender, compliance_line, wire):
         session = start_international_session(
             customer,
             sender,
@@ -77,14 +93,18 @@ class TestAdminComplianceCharge:
         client = APIClient()
         client.force_authenticate(user=customer)
         url = reverse(
-            'regulated-line-charge-send-otp',
+            'regulated-line-submit-payment',
             kwargs={'session_id': session.id, 'line_id': line.id},
         )
         res = client.post(url)
         assert res.status_code == 400
-        assert res.data['detail'] == 'Insufficient funds.'
+        assert 'authorize' in res.data['detail'].lower() or 'wait' in res.data['detail'].lower()
 
-    def test_admin_charge_sends_otp(self, customer, staff, sender, compliance_line, wire):
+    def test_customer_submit_shows_admin_message_when_not_allowed(
+        self, customer, staff, sender, compliance_line, wire,
+    ):
+        compliance_line.customer_message = 'Please contact support to continue.'
+        compliance_line.save(update_fields=['customer_message', 'updated_at'])
         session = start_international_session(
             customer,
             sender,
@@ -95,19 +115,42 @@ class TestAdminComplianceCharge:
         )
         line = session.lines.first()
         client = APIClient()
-        client.force_authenticate(user=staff)
+        client.force_authenticate(user=customer)
         url = reverse(
-            'admin-regulated-line-charge-send-otp',
+            'regulated-line-submit-payment',
             kwargs={'session_id': session.id, 'line_id': line.id},
         )
         res = client.post(url)
-        assert res.status_code == 200, res.data
-        assert res.data.get('otp')
-        assert len(res.data['otp']) == 6
-        line.refresh_from_db()
-        assert line.status == 'CHARGED'
+        assert res.status_code == 400, res.data
+        assert res.data['detail'] == 'Please contact support to continue.'
 
-    def test_allow_then_customer_can_charge(self, customer, staff, sender, compliance_line, wire):
+    def test_allow_requires_payment_configuration(self, customer, staff, sender, wire):
+        bare_line = ComplianceFeeLine.objects.create(
+            name='Unconfigured',
+            code='bare',
+            applies_to=ComplianceFeeLine.AppliesTo.INTERNATIONAL_TRANSFER,
+            flat_amount=Decimal('10.00'),
+        )
+        session = start_international_session(
+            customer,
+            sender,
+            '2222222222222222',
+            Decimal('1000'),
+            'TRANSFER_INTERNATIONAL',
+            international_wire_details=wire,
+        )
+        line = session.lines.filter(fee_line=bare_line).first()
+        admin = APIClient()
+        admin.force_authenticate(user=staff)
+        allow_url = reverse(
+            'admin-regulated-line-allow-customer-charge',
+            kwargs={'session_id': session.id, 'line_id': line.id},
+        )
+        res = admin.post(allow_url)
+        assert res.status_code == 400
+        assert 'configure' in res.data['detail'].lower()
+
+    def test_allow_then_customer_submits_payment(self, customer, staff, sender, compliance_line, wire):
         session = start_international_session(
             customer,
             sender,
@@ -126,19 +169,116 @@ class TestAdminComplianceCharge:
         assert admin.post(allow_url).status_code == 200
         line.refresh_from_db()
         assert line.customer_self_charge_allowed is True
+        assert line.payment_reference
 
         cust = APIClient()
         cust.force_authenticate(user=customer)
-        charge_url = reverse(
-            'regulated-line-charge-send-otp',
+        submit_url = reverse(
+            'regulated-line-submit-payment',
             kwargs={'session_id': session.id, 'line_id': line.id},
         )
-        res = cust.post(charge_url)
-        assert res.status_code == 200
+        res = cust.post(submit_url)
+        assert res.status_code == 200, res.data
         line.refresh_from_db()
-        assert line.status == 'CHARGED'
+        assert line.status == RegulatedTransferSessionLine.Status.PAYMENT_SUBMITTED
 
-    def test_allow_blocked_when_insufficient_funds(self, customer, staff, sender, compliance_line, wire):
+    def test_admin_cannot_confirm_before_customer_submits(
+        self, customer, staff, sender, compliance_line, wire,
+    ):
+        session = start_international_session(
+            customer,
+            sender,
+            '2222222222222222',
+            Decimal('1000'),
+            'TRANSFER_INTERNATIONAL',
+            international_wire_details=wire,
+        )
+        line = session.lines.first()
+        admin = APIClient()
+        admin.force_authenticate(user=staff)
+        allow_url = reverse(
+            'admin-regulated-line-allow-customer-charge',
+            kwargs={'session_id': session.id, 'line_id': line.id},
+        )
+        assert admin.post(allow_url).status_code == 200
+
+        confirm_url = reverse(
+            'admin-regulated-line-confirm-payment',
+            kwargs={'session_id': session.id, 'line_id': line.id},
+        )
+        res = admin.post(confirm_url)
+        assert res.status_code == 400
+        assert 'customer' in res.data['detail'].lower()
+
+    def test_compliance_otp_single_use_and_not_time_limited(
+        self, customer, staff, sender, compliance_line, wire,
+    ):
+        from apps.users.models import EmailOTPToken
+
+        session = start_international_session(
+            customer,
+            sender,
+            '2222222222222222',
+            Decimal('1000'),
+            'TRANSFER_INTERNATIONAL',
+            international_wire_details=wire,
+        )
+        line = session.lines.first()
+        admin = APIClient()
+        admin.force_authenticate(user=staff)
+        allow_url = reverse(
+            'admin-regulated-line-allow-customer-charge',
+            kwargs={'session_id': session.id, 'line_id': line.id},
+        )
+        assert admin.post(allow_url).status_code == 200
+
+        cust = APIClient()
+        cust.force_authenticate(user=customer)
+        submit_url = reverse(
+            'regulated-line-submit-payment',
+            kwargs={'session_id': session.id, 'line_id': line.id},
+        )
+        assert cust.post(submit_url).status_code == 200
+
+        confirm_url = reverse(
+            'admin-regulated-line-confirm-payment',
+            kwargs={'session_id': session.id, 'line_id': line.id},
+        )
+        assert admin.post(confirm_url).status_code == 200
+
+        otp_url = reverse(
+            'admin-regulated-line-charge-send-otp',
+            kwargs={'session_id': session.id, 'line_id': line.id},
+        )
+        res = admin.post(otp_url)
+        assert res.status_code == 200, res.data
+        code = res.data['otp']
+
+        token = EmailOTPToken.objects.get(
+            user=customer,
+            purpose='regulated_fee',
+            context_id=line.id,
+            token=code,
+        )
+        token.expires_at = timezone.now() - timedelta(minutes=5)
+        token.save(update_fields=['expires_at'])
+
+        verify_line_otp(line.id, customer, code)
+        line.refresh_from_db()
+        assert line.status == RegulatedTransferSessionLine.Status.OTP_VERIFIED
+        token.refresh_from_db()
+        assert token.is_used is True
+        assert not EmailOTPToken.objects.filter(
+            user=customer,
+            purpose='regulated_fee',
+            context_id=line.id,
+            token=code,
+            is_used=False,
+        ).exists()
+
+    def test_admin_confirm_then_send_otp_without_balance_debit(
+        self, customer, staff, sender, compliance_line, wire,
+    ):
         session = start_international_session(
             customer,
             sender,
@@ -151,14 +291,149 @@ class TestAdminComplianceCharge:
         sender.available_balance = Decimal('0')
         sender.balance = Decimal('0')
         sender.save(update_fields=['available_balance', 'balance'])
+
         admin = APIClient()
         admin.force_authenticate(user=staff)
         allow_url = reverse(
             'admin-regulated-line-allow-customer-charge',
             kwargs={'session_id': session.id, 'line_id': line.id},
         )
-        res = admin.post(allow_url)
-        assert res.status_code == 400
-        assert 'Admin → Accounts' in res.data['detail']
+        assert admin.post(allow_url).status_code == 200
+
+        cust = APIClient()
+        cust.force_authenticate(user=customer)
+        submit_url = reverse(
+            'regulated-line-submit-payment',
+            kwargs={'session_id': session.id, 'line_id': line.id},
+        )
+        assert cust.post(submit_url).status_code == 200
+
+        confirm_url = reverse(
+            'admin-regulated-line-confirm-payment',
+            kwargs={'session_id': session.id, 'line_id': line.id},
+        )
+        assert admin.post(confirm_url).status_code == 200
         line.refresh_from_db()
-        assert line.customer_self_charge_allowed is False
+        assert line.status == RegulatedTransferSessionLine.Status.PAYMENT_CONFIRMED
+
+        otp_url = reverse(
+            'admin-regulated-line-charge-send-otp',
+            kwargs={'session_id': session.id, 'line_id': line.id},
+        )
+        res = admin.post(otp_url)
+        assert res.status_code == 200, res.data
+        assert res.data.get('otp')
+        assert len(res.data['otp']) == 6
+        line.refresh_from_db()
+        assert line.status == RegulatedTransferSessionLine.Status.CHARGED
+        assert line.fee_transaction_id is None
+        sender.refresh_from_db()
+        assert sender.available_balance == Decimal('0')
+
+    def test_customer_submit_with_optional_proof(self, customer, staff, sender, compliance_line, wire):
+        from django.core.files.uploadedfile import SimpleUploadedFile
+
+        session = start_international_session(
+            customer,
+            sender,
+            '2222222222222222',
+            Decimal('1000'),
+            'TRANSFER_INTERNATIONAL',
+            international_wire_details=wire,
+        )
+        line = session.lines.first()
+        admin = APIClient()
+        admin.force_authenticate(user=staff)
+        allow_url = reverse(
+            'admin-regulated-line-allow-customer-charge',
+            kwargs={'session_id': session.id, 'line_id': line.id},
+        )
+        assert admin.post(allow_url).status_code == 200
+
+        cust = APIClient()
+        cust.force_authenticate(user=customer)
+        submit_url = reverse(
+            'regulated-line-submit-payment',
+            kwargs={'session_id': session.id, 'line_id': line.id},
+        )
+        proof = SimpleUploadedFile('receipt.png', b'fake-png-bytes', content_type='image/png')
+        res = cust.post(submit_url, {'payment_proof': proof}, format='multipart')
+        assert res.status_code == 200, res.data
+        line.refresh_from_db()
+        assert line.payment_proof
+        assert line.status == RegulatedTransferSessionLine.Status.PAYMENT_SUBMITTED
+
+    def test_otp_persisted_when_email_queue_fails(
+        self, customer, staff, sender, compliance_line, wire,
+    ):
+        session = start_international_session(
+            customer,
+            sender,
+            '2222222222222222',
+            Decimal('1000'),
+            'TRANSFER_INTERNATIONAL',
+            international_wire_details=wire,
+        )
+        line = session.lines.first()
+        admin = APIClient()
+        admin.force_authenticate(user=staff)
+        allow_url = reverse(
+            'admin-regulated-line-allow-customer-charge',
+            kwargs={'session_id': session.id, 'line_id': line.id},
+        )
+        assert admin.post(allow_url).status_code == 200
+
+        cust = APIClient()
+        cust.force_authenticate(user=customer)
+        submit_url = reverse(
+            'regulated-line-submit-payment',
+            kwargs={'session_id': session.id, 'line_id': line.id},
+        )
+        assert cust.post(submit_url).status_code == 200
+
+        confirm_url = reverse(
+            'admin-regulated-line-confirm-payment',
+            kwargs={'session_id': session.id, 'line_id': line.id},
+        )
+        assert admin.post(confirm_url).status_code == 200
+
+        from apps.users.models import EmailOTPToken
+
+        with patch('apps.transactions.regulated_flow.queue_email_notification', side_effect=RuntimeError('smtp down')):
+            otp_url = reverse(
+                'admin-regulated-line-charge-send-otp',
+                kwargs={'session_id': session.id, 'line_id': line.id},
+            )
+            res = admin.post(otp_url)
+        assert res.status_code == 200, res.data
+        assert res.data.get('otp')
+        line.refresh_from_db()
+        assert line.status == RegulatedTransferSessionLine.Status.CHARGED
+        assert EmailOTPToken.objects.filter(
+            user=customer,
+            purpose='regulated_fee',
+            context_id=line.id,
+            token=res.data['otp'],
+        ).exists()
+
+    def test_customer_charge_send_otp_only_resends_when_charged(
+        self, customer, staff, sender, compliance_line, wire,
+    ):
+        session = start_international_session(
+            customer,
+            sender,
+            '2222222222222222',
+            Decimal('1000'),
+            'TRANSFER_INTERNATIONAL',
+            international_wire_details=wire,
+        )
+        line = session.lines.first()
+        client = APIClient()
+        client.force_authenticate(user=customer)
+        url = reverse(
+            'regulated-line-charge-send-otp',
+            kwargs={'session_id': session.id, 'line_id': line.id},
+        )
+        res = client.post(url)
+        assert res.status_code == 400
+        assert 'confirmed' in res.data['detail'].lower()
